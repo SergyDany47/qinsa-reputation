@@ -1,0 +1,13 @@
+.env
+.env.local
+*.env
+google-credentials.json
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+dist/
+.DS_Store
+.idea/
+.vscode/
+*.egg-info/
