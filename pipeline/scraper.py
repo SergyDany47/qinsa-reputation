@@ -143,13 +143,14 @@ def _map_review(item: dict) -> dict:
     owner_replied = reply_text is not None
 
     return {
-        "author_name":   item.get("name"),                                  # name → author_name
-        "rating":        item.get("stars"),                                  # stars → rating (NO 'rating')
-        "text":          item.get("text") or "",                             # text → text
-        "review_date":   review_date,                                        # publishedAtDate[:10]
-        "owner_replied": owner_replied,                                      # responseFromOwnerText is not None
-        "reply_text":    reply_text,                                         # responseFromOwnerText
-        "source":        (item.get("reviewOrigin") or "google").lower(),     # reviewOrigin → source
+        "review_id":     item.get("reviewId"),                               # reviewId → review_id (clave única)
+        "author_name":   item.get("name"),                                   # name → author_name
+        "rating":        item.get("stars"),                                   # stars → rating (NO 'rating')
+        "text":          item.get("text") or "",                              # text → text
+        "review_date":   review_date,                                         # publishedAtDate[:10]
+        "owner_replied": owner_replied,                                       # responseFromOwnerText is not None
+        "reply_text":    reply_text,                                          # responseFromOwnerText
+        "source":        (item.get("reviewOrigin") or "google").lower(),      # reviewOrigin → source
     }
 
 
