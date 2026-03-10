@@ -13,36 +13,33 @@ const STEPS = [
 function StepRow({ index, status, message }) {
   const isPending = status === 'pending'
   const isRunning = status === 'running'
-  const isDone    = status === 'done'
-  const isError   = status === 'error'
+  const isDone = status === 'done'
+  const isError = status === 'error'
 
   return (
-    <div className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all duration-300 ${
-      isRunning ? 'bg-blue-50 border-blue-100' :
-      isDone    ? 'bg-emerald-50 border-emerald-100' :
-      isError   ? 'bg-red-50 border-red-100' :
-      'bg-slate-50 border-slate-100'
-    }`}>
-      {/* Step indicator */}
-      <div className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-xs font-bold transition-all ${
-        isRunning ? 'bg-qinsa-blue text-white animate-pulse' :
-        isDone    ? 'bg-qinsa-green text-white' :
-        isError   ? 'bg-red-400 text-white' :
-        'bg-slate-200 text-slate-400'
+    <div className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all duration-300 ${isRunning ? 'bg-blue-50 border-blue-100' :
+      isDone ? 'bg-emerald-50 border-emerald-100' :
+        isError ? 'bg-red-50 border-red-100' :
+          'bg-slate-50 border-slate-100'
       }`}>
-        {isDone  ? '✓' :
-         isError ? '✗' :
-         index + 1}
+      {/* Step indicator */}
+      <div className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-xs font-bold transition-all ${isRunning ? 'bg-qinsa-blue text-white animate-pulse' :
+        isDone ? 'bg-qinsa-green text-white' :
+          isError ? 'bg-red-400 text-white' :
+            'bg-slate-200 text-slate-400'
+        }`}>
+        {isDone ? '✓' :
+          isError ? '✗' :
+            index + 1}
       </div>
 
       {/* Text */}
       <div className="flex-1 min-w-0">
-        <p className={`text-sm font-semibold ${
-          isRunning ? 'text-qinsa-blue' :
-          isDone    ? 'text-emerald-700' :
-          isError   ? 'text-red-600' :
-          'text-slate-400'
-        }`}>
+        <p className={`text-sm font-semibold ${isRunning ? 'text-qinsa-blue' :
+          isDone ? 'text-emerald-700' :
+            isError ? 'text-red-600' :
+              'text-slate-400'
+          }`}>
           {STEPS[index].label}
         </p>
         {message ? (
@@ -62,15 +59,16 @@ const initialSteps = () => [
 ]
 
 export default function Onboarding() {
-  const [placeId, setPlaceId]       = useState('')
+  const [placeId, setPlaceId] = useState('')
   const [maxReviews, setMaxReviews] = useState(50)
-  const [running, setRunning]       = useState(false)
-  const [error, setError]           = useState('')
-  const [steps, setSteps]           = useState(initialSteps)
-  const [showSteps, setShowSteps]   = useState(false)
-  const esRef                       = useRef(null)
-  const { setRestaurant }           = useRestaurant()
-  const navigate                    = useNavigate()
+  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash')
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState('')
+  const [steps, setSteps] = useState(initialSteps)
+  const [showSteps, setShowSteps] = useState(false)
+  const esRef = useRef(null)
+  const { setRestaurant } = useRestaurant()
+  const navigate = useNavigate()
 
   const updateStep = (idx, patch) =>
     setSteps(prev => prev.map((s, i) => (i === idx ? { ...s, ...patch } : s)))
@@ -84,7 +82,7 @@ export default function Onboarding() {
     setShowSteps(true)
     setSteps(initialSteps())
 
-    const url = `${API_URL}/analyze?place_id=${encodeURIComponent(id)}&max_reviews=${maxReviews}`
+    const url = `${API_URL}/analyze?place_id=${encodeURIComponent(id)}&max_reviews=${maxReviews}&model=${encodeURIComponent(selectedModel)}`
     const es = new EventSource(url)
     esRef.current = es
 
@@ -169,16 +167,33 @@ export default function Onboarding() {
                   key={n}
                   onClick={() => setMaxReviews(n)}
                   disabled={running}
-                  className={`flex-1 py-2.5 rounded-xl text-sm font-bold border transition-colors disabled:opacity-50 ${
-                    maxReviews === n
-                      ? 'bg-qinsa-blue text-white border-qinsa-blue'
-                      : 'bg-white text-slate-500 border-slate-200 active:bg-slate-50'
-                  }`}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-bold border transition-colors disabled:opacity-50 ${maxReviews === n
+                    ? 'bg-qinsa-blue text-white border-qinsa-blue'
+                    : 'bg-white text-slate-500 border-slate-200 active:bg-slate-50'
+                    }`}
                 >
                   {n}
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Modelo de IA */}
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-widest text-slate-500 mb-1.5">
+              Modelo de IA
+            </label>
+            <select
+              value={selectedModel}
+              onChange={e => setSelectedModel(e.target.value)}
+              disabled={running}
+              className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-qinsa-green disabled:opacity-50 appearance-none drop-shadow-sm"
+            >
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+              <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+              <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+            </select>
           </div>
 
           {/* Error */}

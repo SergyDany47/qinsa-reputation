@@ -31,14 +31,14 @@ function formatDate(dateStr) {
   return new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(dateStr))
 }
 
-function ReviewCard({ review }) {
-  const { restaurant }                      = useRestaurant()
-  const [expanded, setExpanded]             = useState(false)
+function ReviewCard({ review, selectedModel }) {
+  const { restaurant } = useRestaurant()
+  const [expanded, setExpanded] = useState(false)
   const [suggestedReply, setSuggestedReply] = useState(review.suggested_reply || null)
-  const [generating, setGenerating]         = useState(false)
-  const [genError, setGenError]             = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState(false)
 
-  const text   = review.text || ''
+  const text = review.text || ''
   const isLong = text.length > 200
   const displayText = !isLong || expanded ? text : text.slice(0, 200) + '…'
   const rating = review.rating || 0
@@ -51,7 +51,7 @@ function ReviewCard({ review }) {
       const res = await fetch(`${API_URL}/generate-reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ review_id: review.id, restaurant_id: restaurant.id }),
+        body: JSON.stringify({ review_id: review.id, restaurant_id: restaurant.id, model: selectedModel }),
       })
       if (!res.ok) throw new Error('API error')
       const data = await res.json()
@@ -115,7 +115,7 @@ function ReviewCard({ review }) {
         <div className="mt-3 pt-3 border-t border-slate-100">
           <div className="flex items-center gap-1.5 mb-1.5">
             <svg className="w-3.5 h-3.5 text-qinsa-blue shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
             </svg>
             <span className="text-xs text-qinsa-blue font-bold">Sugerencia IA</span>
           </div>
@@ -138,7 +138,7 @@ function ReviewCard({ review }) {
             ) : (
               <>
                 <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
+                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
                 </svg>
                 Generar respuesta IA
               </>
@@ -162,17 +162,15 @@ function RefreshProgress({ steps }) {
           const s = steps[i]?.status || 'pending'
           return (
             <div key={i} className="flex-1">
-              <div className={`h-1.5 rounded-full mb-1 transition-all duration-500 ${
-                s === 'done'    ? 'bg-qinsa-green' :
-                s === 'running' ? 'bg-qinsa-blue animate-pulse' :
-                s === 'error'   ? 'bg-red-400' :
-                'bg-slate-200'
-              }`} />
-              <p className={`text-[10px] font-medium text-center ${
-                s === 'done'    ? 'text-qinsa-green' :
-                s === 'running' ? 'text-qinsa-blue' :
-                'text-slate-400'
-              }`}>{label}</p>
+              <div className={`h-1.5 rounded-full mb-1 transition-all duration-500 ${s === 'done' ? 'bg-qinsa-green' :
+                  s === 'running' ? 'bg-qinsa-blue animate-pulse' :
+                    s === 'error' ? 'bg-red-400' :
+                      'bg-slate-200'
+                }`} />
+              <p className={`text-[10px] font-medium text-center ${s === 'done' ? 'text-qinsa-green' :
+                  s === 'running' ? 'text-qinsa-blue' :
+                    'text-slate-400'
+                }`}>{label}</p>
             </div>
           )
         })}
@@ -188,12 +186,13 @@ const initialSteps = () => [
 ]
 
 export default function Resenas() {
-  const { restaurant }                    = useRestaurant()
-  const [reviews, setReviews]             = useState([])
-  const [loading, setLoading]             = useState(true)
-  const [refreshing, setRefreshing]       = useState(false)
-  const [refreshSteps, setRefreshSteps]   = useState(initialSteps)
-  const [lastResult, setLastResult]       = useState(null)
+  const { restaurant } = useRestaurant()
+  const [reviews, setReviews] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshSteps, setRefreshSteps] = useState(initialSteps)
+  const [lastResult, setLastResult] = useState(null)
+  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash')
 
   const loadReviews = useCallback(async () => {
     if (!restaurant) return
@@ -219,7 +218,7 @@ export default function Resenas() {
     setLastResult(null)
     setRefreshSteps(initialSteps())
 
-    const es = new EventSource(`${API_URL}/refresh?restaurant_id=${restaurant.id}&max_reviews=10`)
+    const es = new EventSource(`${API_URL}/refresh?restaurant_id=${restaurant.id}&max_reviews=10&model=${encodeURIComponent(selectedModel)}`)
 
     es.onmessage = (e) => {
       const data = JSON.parse(e.data)
@@ -247,7 +246,7 @@ export default function Resenas() {
 
   if (!restaurant) return <NoRestaurant label="las reseñas" />
 
-  const replied    = reviews.filter(r => r.owner_replied).length
+  const replied = reviews.filter(r => r.owner_replied).length
   const hasSuggest = reviews.filter(r => r.suggested_reply).length
 
   return (
@@ -257,16 +256,29 @@ export default function Resenas() {
         <p className="text-white/50 text-xs font-medium uppercase tracking-widest">Últimas reseñas</p>
         <div className="flex items-center justify-between gap-2 mt-0.5">
           <h1 className="text-white text-lg font-bold truncate">{restaurant.name}</h1>
-          <button
-            onClick={startRefresh}
-            disabled={refreshing}
-            className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
-          >
-            <svg className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16" />
-            </svg>
-            Actualizar
-          </button>
+          <div className="flex gap-2">
+            <select
+              value={selectedModel}
+              onChange={e => setSelectedModel(e.target.value)}
+              disabled={refreshing}
+              className="shrink-0 px-2 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg outline-none cursor-pointer disabled:opacity-50 appearance-none"
+            >
+              <option value="gemini-2.5-flash" className="text-slate-800">2.5-Flash</option>
+              <option value="gemini-2.0-flash" className="text-slate-800">2.0-Flash</option>
+              <option value="gemini-1.5-flash" className="text-slate-800">1.5-Flash</option>
+              <option value="gemini-1.5-pro" className="text-slate-800">1.5-Pro</option>
+            </select>
+            <button
+              onClick={startRefresh}
+              disabled={refreshing}
+              className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+            >
+              <svg className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16" />
+              </svg>
+              Actualizar
+            </button>
+          </div>
         </div>
         {!loading && reviews.length > 0 && (
           <div className="flex items-center gap-3 mt-1 flex-wrap">
@@ -290,13 +302,12 @@ export default function Resenas() {
 
         {/* Last refresh result toast */}
         {!refreshing && lastResult && (
-          <div className={`text-center py-2 px-4 rounded-xl text-xs font-semibold ${
-            lastResult.error
+          <div className={`text-center py-2 px-4 rounded-xl text-xs font-semibold ${lastResult.error
               ? 'bg-red-50 text-red-500'
               : lastResult.new_count > 0
                 ? 'bg-emerald-50 text-emerald-700'
                 : 'bg-slate-100 text-slate-500'
-          }`}>
+            }`}>
             {lastResult.error
               ? 'Error al conectar con la API — ¿está corriendo uvicorn?'
               : lastResult.new_count > 0
@@ -313,7 +324,7 @@ export default function Resenas() {
             <p className="text-sm mt-1">No hay reseñas almacenadas aún</p>
           </div>
         ) : (
-          reviews.map(r => <ReviewCard key={r.id} review={r} />)
+          reviews.map(r => <ReviewCard key={r.id} review={r} selectedModel={selectedModel} />)
         )}
       </div>
     </div>

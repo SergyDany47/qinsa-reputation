@@ -87,6 +87,7 @@ _SSE_HEADERS = {
 async def analyze(
     place_id: str = Query(..., description="Google Maps Place ID (formato: ChIJ...)"),
     max_reviews: int = Query(50, ge=10, le=200),
+    model: str = Query("gemini-2.5-flash", description="Modelo de Gemini a usar"),
 ):
     """Pipeline completo para un lugar nuevo. Emite progreso via SSE."""
     loop = asyncio.get_running_loop()
@@ -118,7 +119,7 @@ async def analyze(
                         "message": f"Analizando {len(reviews)} reseñas con Gemini…"})
 
             insights = await loop.run_in_executor(
-                None, lambda: analyze_reviews(reviews, restaurant_name)
+                None, lambda: analyze_reviews(reviews, restaurant_name, model)
             )
 
             yield _sse({"step": 2, "status": "done",
@@ -159,6 +160,7 @@ async def refresh(
     restaurant_id: str = Query(..., description="UUID del restaurante en Supabase"),
     max_reviews: int = Query(10, ge=5, le=50,
                              description="Reseñas más recientes a comprobar"),
+    model: str = Query("gemini-2.5-flash", description="Modelo de Gemini a usar"),
 ):
     """
     Busca las `max_reviews` reseñas más recientes, detecta las nuevas por review_id,
@@ -237,7 +239,7 @@ async def refresh(
                 if r.get("text"):
                     # Captura de r en el closure para evitar bug de referencia tardía
                     reply = await loop.run_in_executor(
-                        None, lambda rv=r: generate_suggested_reply(rv, restaurant_name, context)
+                        None, lambda rv=r: generate_suggested_reply(rv, restaurant_name, context, model)
                     )
                     r["suggested_reply"] = reply
 
@@ -260,7 +262,7 @@ async def refresh(
                     .execute()
 
                 insights = await loop.run_in_executor(
-                    None, lambda: analyze_reviews(all_resp.data, restaurant_name)
+                    None, lambda: analyze_reviews(all_resp.data, restaurant_name, model)
                 )
                 await loop.run_in_executor(
                     None, lambda: upsert_insights(restaurant_id, insights)
@@ -283,6 +285,7 @@ async def refresh(
 class GenerateReplyRequest(BaseModel):
     review_id: str       # UUID de la fila en tabla reviews
     restaurant_id: str   # UUID del restaurante
+    model: str = "gemini-2.5-flash"
 
 
 @app.post("/generate-reply")
@@ -315,7 +318,7 @@ async def generate_reply_endpoint(body: GenerateReplyRequest):
 
     # Generar respuesta con Gemini
     reply = await loop.run_in_executor(
-        None, lambda: generate_suggested_reply(review, restaurant["name"], context)
+        None, lambda: generate_suggested_reply(review, restaurant["name"], context, body.model)
     )
 
     # Guardar en Supabase

@@ -330,3 +330,48 @@ Ejemplos de lo que debe quedar documentado aquí:
 - `_map_review(item)` — mapea exactamente los campos Apify → Supabase según CLAUDE.md
 - El filtro `reviewOrigin` se aplica en el loop aunque el input ya pida `reviewsOrigin: "google"`, como defensa en profundidad
 - Items sin `stars` ni `text` se ignoran (son registros de lugar, no reseñas)
+
+### [2026-03-05] Migración de google-generativeai a google-genai (SDK nuevo)
+- **Motivo:** La librería `google-generativeai` está deprecada. El SDK nuevo es `google-genai`.
+- **Librería anterior:** `google-generativeai==0.8.3` → devuelve FutureWarning en cada import
+- **Librería nueva:** `google-genai>=1.47.0` (instalada como `from google import genai`)
+- **Cambio de API:**
+  - Antes: `genai.configure(api_key=...)` + `genai.GenerativeModel(MODEL).generate_content(...)`
+  - Ahora: `client = genai.Client(api_key=...)` + `client.models.generate_content(model=MODEL, contents=..., config=types.GenerateContentConfig(...))`
+- **requirements.txt:** actualizado a `google-genai>=1.47.0`
+
+### [2026-03-05] Modelo Gemini actualizado a gemini-2.5-flash
+- **Motivo:** El cupo diario del free tier de `gemini-2.0-flash` se agotó durante el desarrollo. `gemini-2.5-flash` es la versión más reciente, tiene cuota separada y es superior en capacidad de razonamiento.
+- **Modelo anterior:** `gemini-2.0-flash` → campo `model_used` en tabla `insights`
+- **Modelo actual:** `gemini-2.5-flash`
+- **Impacto:** El campo `model_used` en la tabla `insights` guardará `'gemini-2.5-flash'`. El default de la columna en Supabase sigue siendo `'gemini-2.0-flash'` — se sobreescribe en cada insert desde el pipeline.
+- **Nota:** Si se activa billing en Google AI Studio, `gemini-2.0-flash` podría volver a ser viable por su menor coste. La constante `MODEL` en `analyzer.py` es fácil de cambiar.
+
+### [2026-03-05] Estructura del analyzer — decisiones de diseño
+- `rating_distribution` se calcula localmente (no gasta tokens de IA) desde los datos del scraper
+- `top_problems` y `top_strengths` pueden tener menos de 3 entradas si Gemini no detecta suficientes patrones recurrentes (correcto — mejor pocos específicos que relleno genérico)
+- El prompt instruye a Gemini a distinguir problemas estructurales vs incidentes puntuales
+- Las respuestas del dueño se incluyen en el prompt para que Gemini analice `response_quality`
+- Test verificado con 20 reseñas reales de EL KIOSKO | Boadilla: sentiment=7.4, 4 empleados detectados (Roxana×3, Julio×3, Alejandro×2, Fran×2), respuesta en JSON válido
+- `staff_mentions` incluye citas literales de reseñas como `sample_quotes`
+- `recurring_issues` puede estar vacío si no hay patrones secundarios suficientes (comportamiento correcto)
+
+### [2026-03-05] supabase-py actualizado a >=2.28.0
+- **Problema:** `supabase==2.10.0` rechazaba la `service_role_key` con formato `sb_secret_...` (nuevo formato de Supabase). Error: `Invalid API key`.
+- **Causa:** La librería v2.10.0 solo validaba claves en formato JWT (`eyJ...`). El nuevo formato de Supabase para `service_role_key` es `sb_secret_...`, que no es un JWT.
+- **Solución:** `pip install --upgrade supabase` → v2.28.0 acepta ambos formatos.
+- **requirements.txt:** cambiado a `supabase>=2.28.0`.
+- **Nota:** La `SUPABASE_ANON_KEY` sigue siendo JWT (`eyJ...`). Solo la `SERVICE_ROLE_KEY` usa el nuevo formato.
+
+### [2026-03-05] Estructura del loader — decisiones de diseño
+- `upsert_restaurant(place_data, google_maps_url)` usa `google_maps_url` como clave de deduplicación con select-then-insert (no upsert de BD, ya que no hay unique constraint en esa columna)
+- `insert_reviews_deduped(restaurant_id, reviews)` carga pares `(author_name, review_date)` existentes y filtra antes de insertar — evita duplicados sin necesitar unique constraint en BD
+- `upsert_insights(restaurant_id, insights)` hace select-then-insert/update — los campos extra del analyzer (`staff_mentions`, `rating_distribution`, `recurring_issues`, `recurring_praise`) se omiten al persistir (no están en el schema de Supabase)
+- Los campos jsonb (`top_problems`, `top_strengths`, `keywords`, `staff_mentions`, `rating_distribution`, `recurring_issues`, `recurring_praise`) se pasan como listas/dicts Python — supabase-py serializa a JSON automáticamente
+- Migración aplicada [2026-03-06]: columnas `staff_mentions`, `rating_distribution`, `recurring_issues`, `recurring_praise` añadidas a la tabla `insights` via SQL dashboard de Supabase
+
+### [2026-03-05] run_pipeline.py — flujo --place-id
+- `--place-id ChIJ...` construye la URL con `PLACE_URL_TEMPLATE` y crea el restaurante en Supabase si no existe
+- `--restaurant-id <uuid>` procesa un restaurante ya registrado usando su `google_maps_url` de la BD
+- `--all` itera todos los prospects de Supabase
+- Test verificado: El Kiosko Boadilla — 50 reseñas scrapeadas, 50 insertadas, insights en Supabase con sentiment=7.8, 4 empleados detectados (Alejandro×7, Julio×7, Roxana×5, Fran×2)

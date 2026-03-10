@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 MODEL = "gemini-2.5-flash"
 
 
-def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante") -> dict:
+def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante", model: str = "gemini-2.5-flash") -> dict:
     """
     Analiza una lista de reseñas con Gemini y devuelve insights accionables.
 
@@ -60,11 +60,11 @@ def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante") -> d
     reviews_text = _format_reviews_for_prompt(reviews)
     prompt = _build_prompt(reviews_text, restaurant_name, len(reviews))
 
-    logger.info(f"Enviando {len(reviews)} reseñas a Gemini ({MODEL})...")
+    logger.info(f"Enviando {len(reviews)} reseñas a Gemini ({model})...")
 
     try:
         response = client.models.generate_content(
-            model=MODEL,
+            model=model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -92,7 +92,7 @@ def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante") -> d
         "rating_distribution": rating_distribution,
         "recurring_issues":    gemini_result.get("recurring_issues", []),
         "recurring_praise":    gemini_result.get("recurring_praise", []),
-        "model_used":          MODEL,
+        "model_used":          model,
     }
 
     logger.info(
@@ -105,7 +105,7 @@ def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante") -> d
     return result
 
 
-def generate_suggested_reply(review: dict, restaurant_name: str, context: dict) -> str:
+def generate_suggested_reply(review: dict, restaurant_name: str, context: dict, model: str = "gemini-2.5-flash") -> str:
     """
     Genera una respuesta sugerida a una reseña usando Gemini.
 
@@ -164,7 +164,7 @@ Responde SOLO con el texto de la respuesta. Sin comillas, sin explicaciones, sin
     client = genai.Client(api_key=api_key)
     try:
         response = client.models.generate_content(
-            model=MODEL,
+            model=model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,  # más creatividad que el análisis de insights
