@@ -190,6 +190,7 @@ export default function Onboarding() {
               className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-qinsa-green disabled:opacity-50 appearance-none drop-shadow-sm"
             >
               <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+              <option value="gemini-flash-lite-latest">Flash Lite (Ilimitado)</option>
               <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
               <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
               <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>

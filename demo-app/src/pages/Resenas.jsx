@@ -37,6 +37,12 @@ function ReviewCard({ review, selectedModel }) {
   const [suggestedReply, setSuggestedReply] = useState(review.suggested_reply || null)
   const [generating, setGenerating] = useState(false)
   const [genError, setGenError] = useState(false)
+  const [published, setPublished] = useState(false)
+
+  const publishReply = () => {
+    setPublished(true)
+    // Opcional: Aquí habría una integración con Google My Business API + actualización en Supabase.
+  }
 
   const text = review.text || ''
   const isLong = text.length > 200
@@ -98,7 +104,7 @@ function ReviewCard({ review, selectedModel }) {
       )}
 
       {/* Owner reply */}
-      {review.owner_replied && review.reply_text && (
+      {review.owner_replied && review.reply_text ? (
         <div className="mt-3 pt-3 border-t border-slate-100">
           <div className="flex items-center gap-1.5 mb-1.5">
             <svg className="w-3.5 h-3.5 text-qinsa-green shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -108,16 +114,41 @@ function ReviewCard({ review, selectedModel }) {
           </div>
           <p className="text-xs text-slate-500 leading-relaxed pl-5">{review.reply_text}</p>
         </div>
-      )}
-
-      {/* AI suggested reply (local state — se actualiza sin recargar) */}
-      {suggestedReply ? (
+      ) : published ? (
         <div className="mt-3 pt-3 border-t border-slate-100">
           <div className="flex items-center gap-1.5 mb-1.5">
-            <svg className="w-3.5 h-3.5 text-qinsa-blue shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+            <svg className="w-3.5 h-3.5 text-qinsa-green shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
-            <span className="text-xs text-qinsa-blue font-bold">Sugerencia IA</span>
+            <span className="text-xs text-qinsa-green font-semibold">Respuesta publicada</span>
+            <span className="text-[10px] bg-qinsa-green/10 text-qinsa-green px-1.5 py-0.5 rounded ml-1">Simulada</span>
+          </div>
+          <p className="text-xs text-slate-500 leading-relaxed pl-5">{suggestedReply}</p>
+        </div>
+      ) : suggestedReply ? (
+        <div className="mt-3 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5 text-qinsa-blue shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+              </svg>
+              <span className="text-xs text-qinsa-blue font-bold">Sugerencia IA</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={generateReply}
+                disabled={generating}
+                className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-md transition-colors disabled:opacity-50"
+              >
+                {generating ? 'Generando…' : '🔄 Generar otra'}
+              </button>
+              <button
+                onClick={publishReply}
+                className="flex items-center gap-1 px-2 py-1 text-[10px] font-bold bg-qinsa-blue hover:bg-qinsa-blue text-white rounded-md transition-colors"
+              >
+                🚀 Publicar en Google
+              </button>
+            </div>
           </div>
           <p className="text-xs text-slate-500 leading-relaxed pl-5 italic">{suggestedReply}</p>
         </div>
@@ -163,13 +194,13 @@ function RefreshProgress({ steps }) {
           return (
             <div key={i} className="flex-1">
               <div className={`h-1.5 rounded-full mb-1 transition-all duration-500 ${s === 'done' ? 'bg-qinsa-green' :
-                  s === 'running' ? 'bg-qinsa-blue animate-pulse' :
-                    s === 'error' ? 'bg-red-400' :
-                      'bg-slate-200'
+                s === 'running' ? 'bg-qinsa-blue animate-pulse' :
+                  s === 'error' ? 'bg-red-400' :
+                    'bg-slate-200'
                 }`} />
               <p className={`text-[10px] font-medium text-center ${s === 'done' ? 'text-qinsa-green' :
-                  s === 'running' ? 'text-qinsa-blue' :
-                    'text-slate-400'
+                s === 'running' ? 'text-qinsa-blue' :
+                  'text-slate-400'
                 }`}>{label}</p>
             </div>
           )
@@ -193,6 +224,8 @@ export default function Resenas() {
   const [refreshSteps, setRefreshSteps] = useState(initialSteps)
   const [lastResult, setLastResult] = useState(null)
   const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash')
+  const [filter, setFilter] = useState('all')
+  const [dateFilter, setDateFilter] = useState('all_time')
 
   const loadReviews = useCallback(async () => {
     if (!restaurant) return
@@ -264,6 +297,7 @@ export default function Resenas() {
               className="shrink-0 px-2 py-1.5 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-lg outline-none cursor-pointer disabled:opacity-50 appearance-none"
             >
               <option value="gemini-2.5-flash" className="text-slate-800">2.5-Flash</option>
+              <option value="gemini-flash-lite-latest" className="text-slate-800">Flash Lite (Ilimitado)</option>
               <option value="gemini-2.0-flash" className="text-slate-800">2.0-Flash</option>
               <option value="gemini-1.5-flash" className="text-slate-800">1.5-Flash</option>
               <option value="gemini-1.5-pro" className="text-slate-800">1.5-Pro</option>
@@ -303,16 +337,34 @@ export default function Resenas() {
         {/* Last refresh result toast */}
         {!refreshing && lastResult && (
           <div className={`text-center py-2 px-4 rounded-xl text-xs font-semibold ${lastResult.error
-              ? 'bg-red-50 text-red-500'
-              : lastResult.new_count > 0
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'bg-slate-100 text-slate-500'
+            ? 'bg-red-50 text-red-500'
+            : lastResult.new_count > 0
+              ? 'bg-emerald-50 text-emerald-700'
+              : 'bg-slate-100 text-slate-500'
             }`}>
             {lastResult.error
               ? 'Error al conectar con la API — ¿está corriendo uvicorn?'
               : lastResult.new_count > 0
                 ? `${lastResult.new_count} reseña${lastResult.new_count !== 1 ? 's' : ''} nueva${lastResult.new_count !== 1 ? 's' : ''} encontrada${lastResult.new_count !== 1 ? 's' : ''}`
                 : 'Sin reseñas nuevas desde la última actualización'}
+          </div>
+        )}
+
+        {/* Filters */}
+        {!loading && reviews.length > 0 && (
+          <div className="space-y-2 pb-2">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 hide-scrollbar">
+              <button onClick={() => setFilter('all')} className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${filter === 'all' ? 'bg-qinsa-blue text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>Todas</button>
+              <button onClick={() => setFilter('needs_reply')} className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${filter === 'needs_reply' ? 'bg-qinsa-blue text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>Sin responder</button>
+              <button onClick={() => setFilter('positive')} className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${filter === 'positive' ? 'bg-qinsa-blue text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>Positivas (4-5★)</button>
+              <button onClick={() => setFilter('negative')} className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${filter === 'negative' ? 'bg-qinsa-blue text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>Negativas (1-2★)</button>
+            </div>
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 hide-scrollbar">
+              <button onClick={() => setDateFilter('all_time')} className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${dateFilter === 'all_time' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Cualquier fecha</button>
+              <button onClick={() => setDateFilter('30_days')} className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${dateFilter === '30_days' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Últimos 30 días</button>
+              <button onClick={() => setDateFilter('3_months')} className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${dateFilter === '3_months' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Últimos 3 meses</button>
+              <button onClick={() => setDateFilter('1_year')} className={`shrink-0 px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${dateFilter === '1_year' ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>Último año</button>
+            </div>
           </div>
         )}
 
@@ -324,7 +376,36 @@ export default function Resenas() {
             <p className="text-sm mt-1">No hay reseñas almacenadas aún</p>
           </div>
         ) : (
-          reviews.map(r => <ReviewCard key={r.id} review={r} selectedModel={selectedModel} />)
+          (() => {
+            const filteredReviews = reviews.filter(r => {
+              // Date filter
+              if (dateFilter !== 'all_time' && r.review_date) {
+                const rDate = new Date(r.review_date)
+                const now = new Date()
+                const diffTime = Math.abs(now - rDate)
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+                if (dateFilter === '30_days' && diffDays > 30) return false
+                if (dateFilter === '3_months' && diffDays > 90) return false
+                if (dateFilter === '1_year' && diffDays > 365) return false
+              }
+
+              // Status filter
+              if (filter === 'needs_reply') return !r.owner_replied && r.text
+              if (filter === 'positive') return r.rating >= 4
+              if (filter === 'negative') return r.rating <= 2
+              return true
+            })
+            if (filteredReviews.length === 0) {
+              return (
+                <div className="text-center py-12 text-slate-400">
+                  <p className="font-medium">No hay resultados</p>
+                  <p className="text-sm mt-1">Prueba con otro filtro</p>
+                </div>
+              )
+            }
+            return filteredReviews.map(r => <ReviewCard key={r.id} review={r} selectedModel={selectedModel} />)
+          })()
         )}
       </div>
     </div>

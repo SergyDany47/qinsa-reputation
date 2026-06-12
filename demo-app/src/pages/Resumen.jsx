@@ -3,7 +3,30 @@ import { supabase } from '../lib/supabase'
 import { useRestaurant } from '../App'
 import Spinner from '../components/Spinner'
 import NoRestaurant from '../components/NoRestaurant'
+function StarFilled({ className = 'w-3 h-3' }) {
+  return (
+    <svg className={className} viewBox="0 0 20 20" fill="currentColor">
+      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+    </svg>
+  )
+}
 
+function RecentReviewCard({ review }) {
+  return (
+    <div className="bg-white rounded-xl p-3 border border-slate-100 shadow-sm mb-2">
+      <div className="flex justify-between items-start mb-1.5">
+        <span className="font-semibold text-sm text-slate-800 truncate pr-2">{review.author_name}</span>
+        <div className="flex gap-0.5 shrink-0 mt-0.5">
+          {[1, 2, 3, 4, 5].map(s => (
+            <StarFilled key={s} className={`w-3 h-3 ${s <= review.rating ? 'text-amber-400' : 'text-slate-200'}`} />
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-slate-600 line-clamp-2">{review.text}</p>
+      <div className="mt-2 text-[10px] text-slate-400 font-medium">Hace poco</div>
+    </div>
+  )
+}
 function ScoreRing({ score }) {
   const size = 140
   const stroke = 10
@@ -60,17 +83,32 @@ function StrengthCard({ text, index }) {
 export default function Resumen() {
   const { restaurant } = useRestaurant()
   const [insights, setInsights] = useState(null)
+  const [recentReviews, setRecentReviews] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!restaurant) { setLoading(false); return }
     setLoading(true)
-    supabase
-      .from('insights')
-      .select('sentiment_score,summary,top_problems,top_strengths,response_quality')
-      .eq('restaurant_id', restaurant.id)
-      .single()
-      .then(({ data }) => { setInsights(data); setLoading(false) })
+
+    Promise.all([
+      supabase
+        .from('insights')
+        .select('sentiment_score,summary,top_problems,top_strengths,response_quality,keywords')
+        .eq('restaurant_id', restaurant.id)
+        .single(),
+      supabase
+        .from('reviews')
+        .select('id, rating, text, author_name, review_date')
+        .eq('restaurant_id', restaurant.id)
+        .not('text', 'is', null)
+        .not('text', 'eq', '')
+        .order('review_date', { ascending: false })
+        .limit(3)
+    ]).then(([insightsRes, reviewsRes]) => {
+      setInsights(insightsRes.data)
+      setRecentReviews(reviewsRes.data || [])
+      setLoading(false)
+    })
   }, [restaurant?.id])
 
   if (!restaurant) return <NoRestaurant label="el resumen ejecutivo" />
@@ -138,6 +176,26 @@ export default function Resumen() {
               </div>
             )}
 
+            {/* Keywords */}
+            {insights.keywords?.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2.5">
+                  <svg className="w-4 h-4 text-qinsa-blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                    <line x1="7" y1="7" x2="7.01" y2="7" />
+                  </svg>
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-slate-500">Palabras clave</h2>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {insights.keywords.map((kw, i) => (
+                    <span key={i} className="px-2.5 py-1 bg-qinsa-light text-qinsa-blue rounded-lg text-xs font-semibold">
+                      #{kw}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Respuesta del dueño */}
             {insights.response_quality && (
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100">
@@ -148,6 +206,21 @@ export default function Resumen() {
                   <h2 className="text-xs font-bold uppercase tracking-widest text-slate-500">Gestión de respuestas</h2>
                 </div>
                 <p className="text-sm text-slate-600 leading-relaxed">{insights.response_quality}</p>
+              </div>
+            )}
+
+            {/* Actividad reciente */}
+            {recentReviews.length > 0 && (
+              <div className="pt-2">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <div className="w-2 h-2 bg-slate-400 rounded-full" />
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-slate-500">Actividad reciente</h2>
+                </div>
+                <div className="space-y-2">
+                  {recentReviews.map(review => (
+                    <RecentReviewCard key={review.id} review={review} />
+                  ))}
+                </div>
               </div>
             )}
           </>

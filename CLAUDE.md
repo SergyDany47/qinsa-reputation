@@ -302,6 +302,24 @@ Ejemplos de lo que debe quedar documentado aquí:
 
 ---
 
+## Estado actual del proyecto (actualizado 2026-06-12)
+
+### Documentación técnica
+- **`PIPELINE_ARCHITECTURE.md`** (raíz del proyecto) — Arquitectura completa del pipeline documentada a partir del código fuente real. Incluye: flujo secuencial paso a paso para cada modo de entrada (`--place-id`, `--restaurant-id`, `--all`, API SSE), contratos de datos exactos (item crudo Apify → scraper output → Gemini JSON → Supabase), listado de dependencias con versiones y uso exacto de cada SDK, mecánica de deduplicación de reseñas, y tabla de responsabilidades por archivo.
+
+### Componentes implementados y verificados
+- **`pipeline/scraper.py`** — Scraping via Apify `compass/google-maps-reviews-scraper`, mapeo de campos, cálculo de response_rate.
+- **`pipeline/analyzer.py`** — Análisis con `gemini-2.5-flash` via SDK `google-genai`, generación de `suggested_reply`, retry automático con tenacity.
+- **`pipeline/loader.py`** — Toda la persistencia en Supabase con deduplicación robusta (review_id + fallback por par author/date).
+- **`pipeline/run_pipeline.py`** — Orquestador CLI con 3 modos de entrada.
+- **`pipeline/api.py`** — FastAPI con SSE para `/analyze`, `/refresh`, `/generate-reply` y `/health`.
+- **`demo-app/`** — React app mobile-first con filtros de reseñas, flujo "copiar respuesta", vista Resumen con keywords e historial.
+
+### Issue conocido pendiente
+- `tenacity` está importado en `analyzer.py` pero no está en `requirements.txt`. Debe añadirse.
+
+---
+
 ## Registro de decisiones técnicas
 
 ### [2026-03-05] Migración de Google Natural Language API a Gemini API
@@ -375,3 +393,22 @@ Ejemplos de lo que debe quedar documentado aquí:
 - `--restaurant-id <uuid>` procesa un restaurante ya registrado usando su `google_maps_url` de la BD
 - `--all` itera todos los prospects de Supabase
 - Test verificado: El Kiosko Boadilla — 50 reseñas scrapeadas, 50 insertadas, insights en Supabase con sentiment=7.8, 4 empleados detectados (Alejandro×7, Julio×7, Roxana×5, Fran×2)
+
+### [2026-06-12] Auditoría del modelo de datos — preparación para migración multi-tenant
+- **Documento generado:** `DATABASE_MODEL.md` en la raíz del proyecto.
+- **Alcance:** Mapa de relaciones de las 6 tablas, análisis de las 8 políticas RLS activas, e informe técnico de las 6 limitaciones estructurales que impiden el soporte nativo multi-tenant.
+- **Hallazgos clave:**
+  - El rol `authenticated` (Supabase Auth) no tiene ninguna política RLS — un usuario logueado no puede acceder a sus propios datos por el canal de autenticación estándar.
+  - `restaurants` no tiene `owner_id` ni `tenant_id` — imposible filtrar por propietario en RLS.
+  - `insights.restaurant_id` tiene constraint UNIQUE — impide histórico de análisis por período.
+  - `field_visits.visited_by` es texto libre — no es FK a un usuario real.
+  - Faltan: tabla `tenants`, tabla `user_restaurant_memberships`, índice en `reviews.review_id`.
+  - `schema.sql` está desactualizado — no refleja las columnas añadidas en marzo 2026 (`review_id`, `suggested_reply` en reviews; `staff_mentions`, `rating_distribution`, `recurring_issues`, `recurring_praise` en insights; tabla `restaurant_context`).
+- **Impacto en la fase actual:** Ninguno — el esquema es correcto para la validación con un único operador interno usando `service_role`.
+- **Acción futura:** Ejecutar la migración multi-tenant antes de incorporar el primer cliente real del MVP. Ver sección 3.8 de `DATABASE_MODEL.md` para la lista completa de cambios necesarios.
+
+### [2026-03-10] Mejoras Funcionales del MVP Frontend
+- **Filtros de Reseñas:** Añadidos filtros para aislar reseñas por "Todas", "Sin responder", "Positivas" y "Negativas", lo cual es clave para la demostración del problema en visitas comerciales.
+- **Flujo "Copiar respuesta":** Se añadió un botón de portapapeles en la sugerencia IA. Al hacer clic, copia el texto y simula localmente el cambio interno de estado a "Respondida", para cerrar el ciclo en las demos.
+- **Resumen Completo:** La vista de Resumen incorpora las Palabras Clave (`keywords`) directamente desde `insights` y mapea las 3 últimas reseñas como timeline de "Actividad reciente" unificando los datos extraídos de la BD en una sola request concurrente `Promise.all`.
+- **Nuevo Modelo en UI:** Añadida la opción `gemini-flash-lite-latest` al frontend ("Flash Lite Ilimitado") como salvavidas anti-agotamiento de cuota de la capa gratuita, y configurada la captura limpia del error HTTP 429 en `api.py`.

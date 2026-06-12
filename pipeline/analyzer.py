@@ -21,6 +21,7 @@ import sys
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 load_dotenv()
 logging.basicConfig(
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 MODEL = "gemini-2.5-flash"
 
-
+@retry(wait=wait_exponential(multiplier=2, min=3, max=30), stop=stop_after_attempt(5))
 def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante", model: str = "gemini-2.5-flash") -> dict:
     """
     Analiza una lista de reseñas con Gemini y devuelve insights accionables.
@@ -105,6 +106,7 @@ def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante", mode
     return result
 
 
+@retry(wait=wait_exponential(multiplier=2, min=3, max=30), stop=stop_after_attempt(5))
 def generate_suggested_reply(review: dict, restaurant_name: str, context: dict, model: str = "gemini-2.5-flash") -> str:
     """
     Genera una respuesta sugerida a una reseña usando Gemini.
@@ -127,7 +129,7 @@ def generate_suggested_reply(review: dict, restaurant_name: str, context: dict, 
 
     ctx = context or {}
     owner_name   = ctx.get("owner_name") or "El equipo del restaurante"
-    tone         = ctx.get("tone") or "profesional y amable"
+    tone         = ctx.get("tone") or "profesional y amable pero con un toque humano y coloquial"
     instructions = ctx.get("instructions") or ""
 
     rating    = review.get("rating", 0)

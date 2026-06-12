@@ -148,7 +148,10 @@ async def analyze(
 
         except Exception as e:
             logger.error(f"Error en /analyze para {place_id}: {e}", exc_info=True)
-            yield _sse({"status": "error", "message": str(e)})
+            msg = str(e)
+            if "429" in msg or "Quota" in msg or "RESOURCE_EXHAUSTED" in msg:
+                msg = "¡Cuota de IA de Google agotada! Revisa tus límites o cambia al modelo 'Flash Lite' en el desplegable."
+            yield _sse({"status": "error", "message": msg})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -275,7 +278,10 @@ async def refresh(
 
         except Exception as e:
             logger.error(f"Error en /refresh para {restaurant_id}: {e}", exc_info=True)
-            yield _sse({"status": "error", "message": str(e)})
+            msg = str(e)
+            if "429" in msg or "Quota" in msg or "RESOURCE_EXHAUSTED" in msg:
+                msg = "¡Cuota de IA de Google agotada! Revisa tus límites o cambia al modelo 'Flash Lite' en el desplegable."
+            yield _sse({"status": "error", "message": msg})
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
@@ -317,9 +323,15 @@ async def generate_reply_endpoint(body: GenerateReplyRequest):
     )
 
     # Generar respuesta con Gemini
-    reply = await loop.run_in_executor(
-        None, lambda: generate_suggested_reply(review, restaurant["name"], context, body.model)
-    )
+    try:
+        reply = await loop.run_in_executor(
+            None, lambda: generate_suggested_reply(review, restaurant["name"], context, body.model)
+        )
+    except Exception as e:
+        msg = str(e)
+        if "429" in msg or "Quota" in msg or "RESOURCE_EXHAUSTED" in msg:
+            raise HTTPException(status_code=429, detail="¡Cuota de IA de Google agotada! Revisa tus límites o cambia al modelo 'Flash Lite'.")
+        raise HTTPException(status_code=500, detail=f"Error generando respuesta: {msg}")
 
     # Guardar en Supabase
     supabase.table("reviews") \
