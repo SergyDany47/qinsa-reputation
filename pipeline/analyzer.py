@@ -106,6 +106,58 @@ def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante", mode
     return result
 
 
+def _build_reply_prompt(review: dict, restaurant_name: str, context: dict) -> str:
+    """
+    Construye el prompt de respuesta a una reseña (función pura, sin red).
+
+    Inyección SEO (keyword injection): si el contexto trae `keywords_objetivo`
+    (lista de términos estratégicos) y la reseña es positiva (4-5★), se instruye
+    a Gemini a integrar orgánicamente 1-2 de esos términos en la respuesta para
+    mejorar el posicionamiento local de la ficha. En reseñas negativas/neutras
+    NO se inyecta (sonaría forzado y oportunista).
+    """
+    ctx = context or {}
+    owner_name   = ctx.get("owner_name") or "El equipo del restaurante"
+    tone         = ctx.get("tone") or "profesional y amable pero con un toque humano y coloquial"
+    instructions = ctx.get("instructions") or ""
+    keywords     = ctx.get("keywords_objetivo") or []
+
+    rating = int(review.get("rating", 0) or 0)
+    text   = (review.get("text") or "").strip()
+
+    extra_line = f"- {instructions}" if instructions else ""
+
+    # Regla de inyección SEO solo para reseñas positivas y solo si hay keywords
+    keyword_line = ""
+    if keywords and rating >= 4:
+        kw_str = ", ".join(f'"{k}"' for k in keywords)
+        keyword_line = (
+            f"- SEO (sutil): integra de forma natural UNO o DOS de estos términos si encaja "
+            f"sin forzar — {kw_str}. Que suene espontáneo, NUNCA como lista ni publicidad. "
+            f"Si ninguno encaja con naturalidad, no fuerces ninguno."
+        )
+
+    return f"""Eres el encargado de responder reseñas de Google Maps de "{restaurant_name}".
+Escribe una respuesta breve y natural a la siguiente reseña.
+
+REGLAS ESTRICTAS — sin excepciones:
+- Exactamente 2 o 3 frases. Nunca más.
+- Tono: {tone}. Respeta este tono en cada palabra.
+- PROHIBIDO usar: exclamaciones exageradas ("¡Qué alegría!", "¡Qué maravilla!", "¡Genial!", "¡Increíble!"), lenguaje corporativo ("estimado cliente", "lamentamos los inconvenientes causados", "le transmitimos nuestras disculpas", "no dude en contactarnos"), aperturas genéricas ("Muchas gracias por tu reseña", "Gracias por compartir tu experiencia").
+- Si la reseña es positiva (4-5★): agradece algo concreto que el cliente menciona + invita a volver de forma natural.
+- Si la reseña es negativa (1-2★): reconoce el problema sin excusas + da un paso concreto o compromiso.
+- Si es neutra (3★): equilibra el agradecimiento con el reconocimiento de lo que se puede mejorar.
+- Varía cómo empiezas. No empieces siempre igual.
+{keyword_line}
+{extra_line}
+- Firma al final como: {owner_name}
+
+RESEÑA ({rating}★ de 5):
+{text}
+
+Responde SOLO con el texto de la respuesta. Sin comillas, sin explicaciones, sin formato."""
+
+
 @retry(wait=wait_exponential(multiplier=2, min=3, max=30), stop=stop_after_attempt(5))
 def generate_suggested_reply(review: dict, restaurant_name: str, context: dict, model: str = "gemini-2.5-flash") -> str:
     """
@@ -127,41 +179,18 @@ def generate_suggested_reply(review: dict, restaurant_name: str, context: dict, 
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY no está definido en el entorno")
 
-    ctx = context or {}
-    owner_name   = ctx.get("owner_name") or "El equipo del restaurante"
-    tone         = ctx.get("tone") or "profesional y amable pero con un toque humano y coloquial"
-    instructions = ctx.get("instructions") or ""
-
-    rating    = review.get("rating", 0)
-    text      = (review.get("text") or "").strip()
+    rating = review.get("rating", 0)
+    text   = (review.get("text") or "").strip()
 
     # Si la reseña no tiene texto, devolver respuesta genérica sin llamar a Gemini
     if not text:
+        owner_name = (context or {}).get("owner_name") or "El equipo del restaurante"
         if int(rating) >= 4:
             return f"¡Muchas gracias por tu valoración! Es un placer tenerte en {restaurant_name}. Esperamos verte muy pronto. Un saludo, {owner_name}"
         else:
             return f"Gracias por compartir tu experiencia. Lamentamos no haber cumplido tus expectativas en {restaurant_name}. Nos ponemos a tu disposición para mejorar. {owner_name}"
 
-    extra_line = f"- {instructions}" if instructions else ""
-
-    prompt = f"""Eres el encargado de responder reseñas de Google Maps de "{restaurant_name}".
-Escribe una respuesta breve y natural a la siguiente reseña.
-
-REGLAS ESTRICTAS — sin excepciones:
-- Exactamente 2 o 3 frases. Nunca más.
-- Tono: {tone}. Respeta este tono en cada palabra.
-- PROHIBIDO usar: exclamaciones exageradas ("¡Qué alegría!", "¡Qué maravilla!", "¡Genial!", "¡Increíble!"), lenguaje corporativo ("estimado cliente", "lamentamos los inconvenientes causados", "le transmitimos nuestras disculpas", "no dude en contactarnos"), aperturas genéricas ("Muchas gracias por tu reseña", "Gracias por compartir tu experiencia").
-- Si la reseña es positiva (4-5★): agradece algo concreto que el cliente menciona + invita a volver de forma natural.
-- Si la reseña es negativa (1-2★): reconoce el problema sin excusas + da un paso concreto o compromiso.
-- Si es neutra (3★): equilibra el agradecimiento con el reconocimiento de lo que se puede mejorar.
-- Varía cómo empiezas. No empieces siempre igual.
-{extra_line}
-- Firma al final como: {owner_name}
-
-RESEÑA ({rating}★ de 5):
-{text}
-
-Responde SOLO con el texto de la respuesta. Sin comillas, sin explicaciones, sin formato."""
+    prompt = _build_reply_prompt(review, restaurant_name, context)
 
     client = genai.Client(api_key=api_key)
     try:

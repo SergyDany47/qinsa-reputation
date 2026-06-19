@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo-app",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "demo-app",
+        "--",
+        "--port",
+        "5173"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "backoffice",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--prefix",
+        "backoffice",
+        "--",
+        "--port",
+        "5174"
+      ],
+      "port": 5174
+    }
+  ]
+}

@@ -219,7 +219,7 @@ def get_restaurant_context(restaurant_id: str):
     try:
         resp = (
             supabase.table("restaurant_context")
-            .select("owner_name,tone,instructions")
+            .select("owner_name,tone,instructions,keywords_objetivo")
             .eq("restaurant_id", restaurant_id)
             .limit(1)
             .execute()

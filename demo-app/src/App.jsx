@@ -1,37 +1,47 @@
-import { createContext, useContext, useState } from 'react'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import BottomNav from './components/BottomNav'
-import Home from './pages/Home'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { AuthProvider, useAuth } from './lib/AuthContext'
+import { RestaurantProvider } from './lib/RestaurantContext'
+import AppLayout from './components/AppLayout'
+import Spinner from './components/Spinner'
+import Login from './pages/Login'
 import Resumen from './pages/Resumen'
 import Empleados from './pages/Empleados'
 import Resenas from './pages/Resenas'
-import Distribucion from './pages/Distribucion'
-import Onboarding from './pages/Onboarding'
 
-export const RestaurantContext = createContext(null)
-export const useRestaurant = () => useContext(RestaurantContext)
+/** Bloquea las rutas privadas: sin sesión → redirige a /login conservando el destino. */
+function RequireAuth({ children }) {
+  const { session, loading } = useAuth()
+  const location = useLocation()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Spinner />
+      </div>
+    )
+  }
+  if (!session) {
+    return <Navigate to="/login" state={{ from: location }} replace />
+  }
+  return children
+}
 
 export default function App() {
-  const [restaurant, setRestaurant] = useState(null)
-
   return (
-    <RestaurantContext.Provider value={{ restaurant, setRestaurant }}>
-      <BrowserRouter>
-        {/* max-w-[430px] centra la app en tablet/desktop manteniendo ancho iPhone */}
-        <div className="max-w-[430px] mx-auto h-screen flex flex-col bg-slate-50 overflow-hidden shadow-2xl">
-          <main className="flex-1 overflow-y-auto">
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/resumen" element={<Resumen />} />
-              <Route path="/empleados" element={<Empleados />} />
-              <Route path="/resenas" element={<Resenas />} />
-              <Route path="/distribucion" element={<Distribucion />} />
-              <Route path="/onboarding" element={<Onboarding />} />
-            </Routes>
-          </main>
-          <BottomNav />
-        </div>
-      </BrowserRouter>
-    </RestaurantContext.Provider>
+    <AuthProvider>
+      <RestaurantProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
+              <Route index element={<Resumen />} />
+              <Route path="equipo" element={<Empleados />} />
+              <Route path="resenas" element={<Resenas />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </RestaurantProvider>
+    </AuthProvider>
   )
 }

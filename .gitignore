@@ -11,3 +11,6 @@ dist/
 .idea/
 .vscode/
 *.egg-info/
+
+# Claude Code — ajustes locales por máquina (no compartir)
+.claude/settings.local.json

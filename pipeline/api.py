@@ -45,6 +45,7 @@ from loader import (
     get_restaurant_context,
     supabase,
 )
+from admin import router as admin_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,9 +58,12 @@ app = FastAPI(title="Qinsa Pipeline API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Router del backoffice interno (/admin/*), protegido por platform admin
+app.include_router(admin_router)
 
 PLACE_URL_TEMPLATE = "https://www.google.com/maps/place/?q=place_id:{place_id}"
 
