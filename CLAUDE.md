@@ -349,6 +349,16 @@ Ejemplos de lo que debe quedar documentado aquí:
 
 ## Registro de decisiones técnicas
 
+### [2026-06-23] Fase 1 — Motor de ingesta autónomo (consolidación + scheduler)
+- **Consolidación (deuda D2 saldada):** toda la ingesta incremental vive ahora en una **única función** `pipeline/ingest.py:run_incremental_ingest(restaurant_id, max_reviews, generate_replies, model, emit)` — síncrona, con callback `emit` de progreso. La usan **lo mismo** el botón manual (SSE) y el scheduler, así no divergen. Incluye el fix de métricas de ficha y setea `last_ingest_at` en cada ejecución.
+- **SSE sobre función síncrona:** `admin.py:/ingest` corre `run_incremental_ingest` en un hilo (`run_in_executor`) y puentea su `emit` al stream con una `asyncio.Queue` + `call_soon_threadsafe`. Sentinela `_done`/`_error` para cerrar.
+- **Scheduler:** `pipeline/scheduler.py` con **APScheduler** (`BackgroundScheduler`, in-process). Un tick cada 15 min relee la BD y ejecuta `run_incremental_ingest` en los restaurantes con `auto_ingest_enabled` que toquen (`last_ingest_at` + `ingest_frequency_hours`). `max_instances=1`, parse robusto de timestamptz (py3.9), guardarraíl `MIN_FREQUENCY_HOURS=3`. Arranca/para en `api.py` (`on_event` startup/shutdown). **Asume 1 worker**; con varios habría que dedicar un proceso.
+- **Modelo de datos:** `restaurants` += `auto_ingest_enabled`, `ingest_frequency_hours` (default 6), `last_ingest_at` (migración `20260619140000`).
+- **Endpoint:** `PUT /admin/restaurants/{id}/schedule` (valida freq 3-168h → 422). El detalle de org devuelve los 3 campos.
+- **Limpieza:** eliminados de `api.py` los endpoints muertos `/analyze`, `/refresh`, `/generate-reply` (ningún frontend los usaba; la lógica está en admin + ingest). `api.py` queda mínimo: CORS + router admin + scheduler + health.
+- **UI backoffice:** en `RestaurantRow`, toggle "Auto-ingesta" + selector de frecuencia + "Última: …". El "ejecutar ahora" es el botón Refresh ya existente.
+- **Verificado sin gastar Apify:** imports OK, scheduler arranca (log), `/analyze` y `/refresh` → 404, `PUT /schedule` 200 + 422 en freq<3, lógica `_is_due`/`_parse_ts` correcta, build backoffice limpio (133 módulos). Rosi quedó **desactivado** para que el tick no dispare Apify. `apscheduler` añadido a requirements.
+
 ### [2026-06-19] Regenerar respuestas IA sin re-scrapear (iteración de tono)
 - **Problema detectado por el usuario:** `Refresh` deduplica y solo genera `suggested_reply` para reseñas NUEVAS; tras cambiar el contexto (tono/keywords) no se re-aplica a las reseñas ya guardadas. Además `Refresh` gasta créditos de Apify aunque no haya nada nuevo.
 - **Solución:** operación **separada** `GET /admin/restaurants/{id}/regenerate-replies` (SSE, admin-gated) que **NO toca Apify**: carga las reseñas ya en BD (con texto; por defecto solo `owner_replied=false`, donde la sugerencia aporta) y regenera `suggested_reply` con el contexto actual + modelo. Progreso procesadas/total. No recalcula insights (no cambian al regenerar respuestas).

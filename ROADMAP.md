@@ -30,7 +30,7 @@ informes, con SEO local potenciado por las respuestas y el flujo de reseñas.
 
 ---
 
-## Fase 1 — Motor de ingesta autónomo  ← SIGUIENTE
+## Fase 1 — Motor de ingesta autónomo  ✅ HECHA (2026-06-23)
 **Objetivo:** el ciclo que busca reseñas nuevas, disponible como **botón manual** y como **ejecución periódica por restaurante**, activable/desactivable desde el backoffice. El botón manual ES la misma ejecución que se programará.
 - Op canónica incremental (D2): scrape recientes → dedupe → sugerencias para nuevas → recalcular insights → actualizar ficha.
 - Config por restaurante: `auto_ingest_enabled` + `frecuencia` (cada X horas).

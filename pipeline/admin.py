@@ -32,18 +32,15 @@ from loader import (
     supabase,  # cliente Supabase con service_role
     get_restaurant_by_id,
     get_restaurant_context,
-    insert_reviews_deduped,
-    upsert_insights,
 )
-from scraper import scrape_reviews
 from analyzer import (
-    analyze_reviews,
     generate_suggested_reply,
     context_options,
     TONE_PRESETS,
     EMOJI_RULES,
     LANGUAGE_RULES,
 )
+from ingest import run_incremental_ingest
 from config import ALLOWED_MODELS, get_all_settings
 
 logger = logging.getLogger(__name__)
@@ -152,6 +149,11 @@ class SettingsUpdate(BaseModel):
     default_historical_count: Optional[int] = Field(None, ge=20, le=200)
 
 
+class ScheduleUpdate(BaseModel):
+    auto_ingest_enabled: bool = False
+    ingest_frequency_hours: int = Field(6, ge=3, le=168)  # mín 3h (coste Apify), máx semanal
+
+
 class ContextUpdate(BaseModel):
     tone_preset: str = "cercano_desenfadado"
     emoji_level: str = "sutil"
@@ -208,7 +210,7 @@ async def organization_detail(
 
     restaurants = (
         supabase.table("restaurants")
-        .select("id,name,place_id,profile_status,google_rating,review_count")
+        .select("id,name,place_id,profile_status,google_rating,review_count,auto_ingest_enabled,ingest_frequency_hours,last_ingest_at")
         .eq("organization_id", org_id).order("name").execute().data or []
     )
     memberships = (
@@ -364,6 +366,25 @@ async def put_context(
     return res.data[0] if res.data else row
 
 
+# ── Programación de ingesta automática ─────────────────────────────────────────
+
+@router.put("/restaurants/{restaurant_id}/schedule")
+async def put_schedule(
+    body: ScheduleUpdate,
+    restaurant_id: str = Path(...),
+    admin: dict = Depends(require_platform_admin),
+):
+    if not supabase.table("restaurants").select("id").eq("id", restaurant_id).execute().data:
+        raise HTTPException(status_code=404, detail="Restaurante no encontrado")
+    res = (
+        supabase.table("restaurants").update({
+            "auto_ingest_enabled": body.auto_ingest_enabled,
+            "ingest_frequency_hours": body.ingest_frequency_hours,
+        }).eq("id", restaurant_id).execute()
+    )
+    return res.data[0] if res.data else {}
+
+
 # ── Ingesta manual (SSE) ───────────────────────────────────────────────────────
 # Operación unificada para los 3 casos del backoffice (misma lógica, 2 perillas):
 #   · Primera ingesta (onboarding):  max_reviews=10,  generate_replies=true
@@ -396,104 +417,41 @@ async def ingest_restaurant(
     model: str = Query("gemini-2.5-flash"),
     admin: dict = Depends(require_platform_admin),
 ):
-    """Scrape + dedupe + insights para un restaurante existente. Progreso vía SSE."""
+    """Ingesta incremental de un restaurante (la MISMA op que el scheduler).
+    Delega en ingest.run_incremental_ingest y puentea su progreso al stream SSE."""
     loop = asyncio.get_running_loop()
 
     async def generate():
-        try:
-            restaurant = await loop.run_in_executor(None, lambda: get_restaurant_by_id(restaurant_id))
-            if not restaurant:
-                yield _sse({"status": "error", "message": "Restaurante no encontrado."})
-                return
-            if not restaurant.get("google_maps_url"):
-                yield _sse({"status": "error",
-                            "message": "El restaurante no tiene google_maps_url. Asígnale un place_id en el onboarding."})
-                return
+        queue: asyncio.Queue = asyncio.Queue()
 
-            name = restaurant.get("name", "Restaurante")
-            context = await loop.run_in_executor(None, lambda: get_restaurant_context(restaurant_id))
+        def emit(**kw):
+            loop.call_soon_threadsafe(queue.put_nowait, kw)
 
-            # Paso 1 — scraping
-            yield _sse({"step": 1, "status": "running",
-                        "message": f"Recopilando hasta {max_reviews} reseñas de Google Maps…"})
-            result = await loop.run_in_executor(
-                None, lambda: scrape_reviews(restaurant["google_maps_url"], max_reviews)
-            )
-            reviews = result["reviews"]
-            if not reviews:
-                yield _sse({"step": 1, "status": "error",
-                            "message": "No se encontraron reseñas. Comprueba el place_id."})
-                return
-
-            # Actualizar métricas de la ficha (rating, nº reseñas, response_rate)
-            place_data = result.get("place_data") or {}
-            ficha = {k: place_data[k] for k in ("google_rating", "review_count", "response_rate")
-                     if place_data.get(k) is not None}
-            if ficha:
-                await loop.run_in_executor(
-                    None, lambda: supabase.table("restaurants").update(ficha).eq("id", restaurant_id).execute()
+        def work():
+            try:
+                res = run_incremental_ingest(
+                    restaurant_id, max_reviews=max_reviews,
+                    generate_replies=generate_replies, model=model, emit=emit,
                 )
+                loop.call_soon_threadsafe(queue.put_nowait, {"_done": res})
+            except Exception as e:
+                logger.error("Error en ingest de %s: %s", restaurant_id, e, exc_info=True)
+                msg = str(e)
+                if "429" in msg or "Quota" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    msg = "Cuota de IA de Google agotada. Cambia de modelo o inténtalo más tarde."
+                loop.call_soon_threadsafe(queue.put_nowait, {"_error": msg})
 
-            yield _sse({"step": 1, "status": "done", "message": f"{len(reviews)} reseñas obtenidas"})
+        loop.run_in_executor(None, work)
 
-            # Paso 2 — detectar nuevas (+ respuestas si procede)
-            yield _sse({"step": 2, "status": "running", "message": "Detectando reseñas nuevas…"})
-            existing = (
-                supabase.table("reviews")
-                .select("review_id,author_name,review_date")
-                .eq("restaurant_id", restaurant_id).execute()
-            )
-            existing_ids = {r.get("review_id") for r in existing.data if r.get("review_id")}
-            existing_pairs = {(r.get("author_name"), r.get("review_date")) for r in existing.data}
-
-            new_reviews = []
-            for r in reviews:
-                rid = r.get("review_id")
-                pair = (r.get("author_name"), r.get("review_date"))
-                if (rid and rid in existing_ids) or pair in existing_pairs:
-                    continue
-                new_reviews.append(r)
-
-            if generate_replies and new_reviews:
-                yield _sse({"step": 2, "status": "running",
-                            "message": f"Generando respuestas IA para {len(new_reviews)} reseña(s)…"})
-                for r in new_reviews:
-                    if r.get("text"):
-                        reply = await loop.run_in_executor(
-                            None, lambda rv=r: generate_suggested_reply(rv, name, context, model)
-                        )
-                        r["suggested_reply"] = reply
-
-            mode = "histórico (sin respuestas)" if not generate_replies else "con respuestas"
-            yield _sse({"step": 2, "status": "done",
-                        "message": f"{len(new_reviews)} reseña(s) nueva(s) · modo {mode}"})
-
-            # Paso 3 — guardar + regenerar insights
-            yield _sse({"step": 3, "status": "running", "message": "Guardando y recalculando insights…"})
-            inserted = await loop.run_in_executor(
-                None, lambda: insert_reviews_deduped(restaurant_id, new_reviews)
-            )
-            if inserted > 0:
-                all_resp = (
-                    supabase.table("reviews")
-                    .select("rating,text,author_name,review_date,owner_replied,reply_text")
-                    .eq("restaurant_id", restaurant_id).execute()
-                )
-                insights = await loop.run_in_executor(
-                    None, lambda: analyze_reviews(all_resp.data, name, model)
-                )
-                await loop.run_in_executor(None, lambda: upsert_insights(restaurant_id, insights))
-
-            yield _sse({"step": 3, "status": "done",
-                        "message": f"{inserted} reseña(s) guardada(s), insights actualizados"})
-            yield _sse_named("done", {"inserted": inserted, "scraped": len(reviews)})
-
-        except Exception as e:
-            logger.error("Error en ingest de %s: %s", restaurant_id, e, exc_info=True)
-            msg = str(e)
-            if "429" in msg or "Quota" in msg or "RESOURCE_EXHAUSTED" in msg:
-                msg = "Cuota de IA de Google agotada. Cambia de modelo o inténtalo más tarde."
-            yield _sse({"status": "error", "message": msg})
+        while True:
+            item = await queue.get()
+            if "_error" in item:
+                yield _sse({"status": "error", "message": item["_error"]})
+                return
+            if "_done" in item:
+                yield _sse_named("done", item["_done"])
+                return
+            yield _sse(item)
 
     return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 

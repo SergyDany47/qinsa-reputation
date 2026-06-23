@@ -1,7 +1,15 @@
 import { useState, useRef } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, streamIngest, streamRegenerate } from '../lib/api'
 import ContextEditor from './ContextEditor'
+
+const FREQ_OPTIONS = [3, 6, 12, 24, 48]
+
+function fmtLast(ts) {
+  if (!ts) return 'nunca'
+  const d = new Date(ts)
+  return new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(d)
+}
 
 const STEP_LABEL = { 1: 'Scraping', 2: 'Análisis', 3: 'Guardado' }
 
@@ -31,6 +39,13 @@ export default function RestaurantRow({ restaurant, orgId }) {
   const model = settings?.config?.default_model || 'gemini-2.5-flash'
   const refreshCount = settings?.config?.default_refresh_count || 10
   const historicalCount = settings?.config?.default_historical_count || 100
+
+  const scheduleMutation = useMutation({
+    mutationFn: (body) => api.updateSchedule(restaurant.id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', orgId] }),
+  })
+  const autoEnabled = restaurant.auto_ingest_enabled
+  const freq = restaurant.ingest_frequency_hours || 6
 
   const hasData = restaurant.review_count != null && restaurant.review_count > 0
   const canIngest = !!restaurant.place_id
@@ -146,6 +161,38 @@ export default function RestaurantRow({ restaurant, orgId }) {
               Cancelar
             </button>
           )}
+        </div>
+      )}
+
+      {/* Auto-ingesta (motor programado) */}
+      {canIngest && (
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <span className="relative inline-block w-9 h-5">
+              <input
+                type="checkbox"
+                className="peer sr-only"
+                checked={!!autoEnabled}
+                disabled={scheduleMutation.isPending}
+                onChange={(e) => scheduleMutation.mutate({ auto_ingest_enabled: e.target.checked, ingest_frequency_hours: freq })}
+              />
+              <span className="absolute inset-0 rounded-full bg-slate-200 peer-checked:bg-qinsa-green transition-colors" />
+              <span className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
+            </span>
+            <span className="font-semibold text-slate-600">Auto-ingesta</span>
+          </label>
+          <label className="flex items-center gap-1.5 text-slate-500">
+            cada
+            <select
+              value={freq}
+              disabled={scheduleMutation.isPending}
+              onChange={(e) => scheduleMutation.mutate({ auto_ingest_enabled: !!autoEnabled, ingest_frequency_hours: Number(e.target.value) })}
+              className="px-2 py-1 bg-white border border-slate-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-qinsa-green"
+            >
+              {FREQ_OPTIONS.map((h) => <option key={h} value={h}>{h}h</option>)}
+            </select>
+          </label>
+          <span className="text-slate-400">Última: {fmtLast(restaurant.last_ingest_at)}</span>
         </div>
       )}
 

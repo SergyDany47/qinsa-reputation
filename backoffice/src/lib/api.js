@@ -52,6 +52,8 @@ export const api = {
   getContext: (restaurantId) => request(`/admin/restaurants/${restaurantId}/context`),
   updateContext: (restaurantId, body) =>
     request(`/admin/restaurants/${restaurantId}/context`, { method: 'PUT', body }),
+  updateSchedule: (restaurantId, body) =>
+    request(`/admin/restaurants/${restaurantId}/schedule`, { method: 'PUT', body }),
 }
 
 /**
