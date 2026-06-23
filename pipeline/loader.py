@@ -4,8 +4,19 @@ loader.py — Carga de datos del pipeline en Supabase.
 Funciones públicas:
     upsert_restaurant(place_data, google_maps_url) → restaurant_id (str)
     insert_reviews_deduped(restaurant_id, reviews)  → int (reseñas insertadas)
-    upsert_insights(restaurant_id, insights)        → None
+    upsert_insights(restaurant_id, insights)        → None  (snapshot vivo)
+    snapshot_insights(restaurant_id, insights, period_start, period_end) → dict
+    get_insights_history(restaurant_id, limit)      → list[dict]
+    get_reviews_in_period(restaurant_id, start, end) → list[dict]
     get_prospects()                                  → list[dict]
+
+Modelo de insights (deuda D1 saldada — ver CLAUDE.md [2026-06-23]):
+    - El snapshot VIVO es la fila con period_start IS NULL: la mantiene
+      `upsert_insights` (sobrescribe en cada ingesta) y es la que lee la
+      app de cliente. No prolifera con cada tick.
+    - El histórico son filas CONGELADAS con period_start/period_end != NULL,
+      una por período; las crea `snapshot_insights` (siempre INSERT). Sobre
+      ellas se construyen los informes comparativos de la Fase 2.
 """
 import logging
 import os
@@ -159,38 +170,112 @@ def insert_reviews_deduped(restaurant_id: str, reviews: list) -> int:
     return count
 
 
-def upsert_insights(restaurant_id: str, insights: dict) -> None:
-    """
-    Inserta o actualiza el registro de insights para un restaurante.
-    Solo persiste los campos definidos en el schema de Supabase.
-    Los campos extra del analyzer (staff_mentions, rating_distribution, etc.)
-    no se persisten — se usan solo para el resumen en consola.
-    """
+def _insights_record(restaurant_id: str, insights: dict) -> dict:
+    """Filtra el dict del analyzer a los campos que existen en el schema."""
     record = {"restaurant_id": restaurant_id}
     for field in _INSIGHTS_SCHEMA_FIELDS:
         if field in insights:
             record[field] = insights[field]
+    return record
+
+
+def upsert_insights(restaurant_id: str, insights: dict) -> None:
+    """
+    Actualiza (o crea) el SNAPSHOT VIVO de insights del restaurante: la fila con
+    period_start IS NULL. Es la que lee la app de cliente y se sobrescribe en cada
+    ingesta — NO prolifera con cada tick del scheduler.
+
+    El histórico por período es responsabilidad de `snapshot_insights`.
+    Solo persiste los campos definidos en el schema de Supabase.
+    """
+    record = _insights_record(restaurant_id, insights)
 
     try:
         existing = (
             supabase.table("insights")
             .select("id")
             .eq("restaurant_id", restaurant_id)
+            .is_("period_start", "null")
+            .limit(1)
             .execute()
         )
     except Exception as e:
-        logger.error(f"Error buscando insights para {restaurant_id}: {str(e)}")
+        logger.error(f"Error buscando insights vivos para {restaurant_id}: {str(e)}")
         raise
 
     try:
         if existing.data:
-            supabase.table("insights").update(record).eq("restaurant_id", restaurant_id).execute()
-            logger.info(f"Insights actualizados para restaurante {restaurant_id}")
+            supabase.table("insights").update(record).eq("id", existing.data[0]["id"]).execute()
+            logger.info(f"Snapshot vivo de insights actualizado para {restaurant_id}")
         else:
             supabase.table("insights").insert(record).execute()
-            logger.info(f"Insights creados para restaurante {restaurant_id}")
+            logger.info(f"Snapshot vivo de insights creado para {restaurant_id}")
     except Exception as e:
-        logger.error(f"Error guardando insights para {restaurant_id}: {str(e)}")
+        logger.error(f"Error guardando insights vivos para {restaurant_id}: {str(e)}")
+        raise
+
+
+def snapshot_insights(restaurant_id: str, insights: dict,
+                      period_start: str, period_end: str) -> dict:
+    """
+    Congela un registro de insights para un período (siempre INSERT). Habilita el
+    histórico y las comparativas de la Fase 2. `period_start`/`period_end` son
+    fechas ISO (YYYY-MM-DD); marcan la fila como histórica (no es el snapshot vivo).
+
+    Returns:
+        La fila insertada (dict).
+    """
+    record = _insights_record(restaurant_id, insights)
+    record["period_start"] = period_start
+    record["period_end"] = period_end
+    try:
+        resp = supabase.table("insights").insert(record).execute()
+        logger.info(f"Insights congelados {period_start}→{period_end} para {restaurant_id}")
+        return resp.data[0] if resp.data else {}
+    except Exception as e:
+        logger.error(f"Error congelando insights para {restaurant_id}: {str(e)}")
+        raise
+
+
+def get_insights_history(restaurant_id: str, limit: int = 12) -> list:
+    """
+    Devuelve los snapshots históricos (period_start NO nulo) de un restaurante,
+    del más reciente al más antiguo. Base de las comparativas de informes.
+    """
+    try:
+        resp = (
+            supabase.table("insights")
+            .select("*")
+            .eq("restaurant_id", restaurant_id)
+            .not_.is_("period_start", "null")
+            .order("period_start", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as e:
+        logger.error(f"Error obteniendo histórico de insights para {restaurant_id}: {str(e)}")
+        raise
+
+
+def get_reviews_in_period(restaurant_id: str, start: str, end: str) -> list:
+    """
+    Reseñas de un restaurante con review_date en [start, end) (fechas ISO).
+    Materia prima determinista de las métricas de informe (volumen, rating,
+    tasa de respuesta), sin gastar IA.
+    """
+    try:
+        resp = (
+            supabase.table("reviews")
+            .select("rating,text,author_name,review_date,owner_replied,reply_text")
+            .eq("restaurant_id", restaurant_id)
+            .gte("review_date", start)
+            .lt("review_date", end)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as e:
+        logger.error(f"Error obteniendo reseñas del período para {restaurant_id}: {str(e)}")
         raise
 
 

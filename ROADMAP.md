@@ -24,8 +24,8 @@ informes, con SEO local potenciado por las respuestas y el flujo de reseñas.
 5. **Coste presente.** Cada ejecución de ingesta gasta Apify; la frecuencia es una palanca de coste, no solo un parámetro.
 
 ## Deuda previa (pequeña, habilita fases)
-- **D1 — Históricos de insights:** el loader hace select-then-update (sobrescribe). Para informes/comparativas hay que **insertar una fila por período** (el esquema ya lo soporta: `insights` 1:N + `period_start/end`). Prerrequisito de la Fase 2.
-- **D2 — Consolidar la ingesta incremental:** una única función compartida para que **el botón manual y el job programado sean exactamente la misma ejecución** (hoy la lógica vive duplicada entre `api.py:/refresh` y `admin.py:ingest`). Prerrequisito de la Fase 1.
+- **D1 — Históricos de insights ✅ SALDADA (2026-06-23):** el snapshot VIVO (fila `period_start IS NULL`, la que lee el cliente) lo sigue sobrescribiendo `upsert_insights`; el histórico son filas CONGELADAS por período (`snapshot_insights`, siempre INSERT). Helpers `get_insights_history` / `get_reviews_in_period` para las comparativas. Habilita la Fase 2.
+- **D2 — Consolidar la ingesta incremental ✅ SALDADA (2026-06-23):** una única función compartida (`pipeline/ingest.py`) para que **el botón manual y el job programado sean exactamente la misma ejecución**.
 - **D3 — `schema.sql` v2 snapshot** (la fuente operativa es `supabase/migrations/`).
 
 ---
@@ -39,9 +39,11 @@ informes, con SEO local potenciado por las respuestas y el flujo de reseñas.
 - **Tecnología del scheduler — DECIDIDO: APScheduler dentro de FastAPI** (lógica en nuestro código, sin infra extra). Requiere que el backend esté siempre en marcha. Se descartaron pg_cron (parte la lógica DB/backend) y n8n (infra extra) para esta fase.
 - **Guardarraíl de coste:** frecuencia mínima 3-6 h configurable; horaria desaconsejada (overkill + coste Apify).
 
-## Fase 2 — Generador de informes (semanal + comparativa)
+## Fase 2 — Generador de informes (semanal + comparativa)  🚧 EN CURSO (esqueleto 2026-06-23)
 **Objetivo:** informe con insights de la semana + **comparativa con la anterior** (sentimiento, volumen, rating, temas, staff). Botón manual ahora; programado semanal después.
-- **Deps:** D1 (históricos) + Fase 1 (scheduler para la versión automática).
+- **Deps:** D1 (históricos) ✅ + Fase 1 (scheduler para la versión automática) ✅.
+- **Hecho:** `pipeline/report_generator.py` (esqueleto) — ventanas ISO semiabiertas, métricas deterministas desde `reviews` (volumen, rating, distribución, positivas/negativas, tasa de respuesta), comparativa de deltas vs. semana anterior, `freeze_period` sobre `snapshot_insights`. Verificado sin gastar IA.
+- **Pendiente:** narrativa con Gemini (hoy stub determinista marcado TODO), endpoint en `admin.py`, disparo programado (scheduler Fase 1) y vista en backoffice/cliente.
 - Salida estructurada reutilizable por el canal (WhatsApp/email) de la Fase 4.
 
 ## Fase 3 — Groundwork de publicación y aprobación
