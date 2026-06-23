@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, streamIngest } from '../lib/api'
+import { api, streamIngest, streamRegenerate } from '../lib/api'
+import ContextEditor from './ContextEditor'
 
 const STEP_LABEL = { 1: 'Scraping', 2: 'Análisis', 3: 'Guardado' }
 
@@ -19,6 +20,9 @@ export default function RestaurantRow({ restaurant, orgId }) {
   const [steps, setSteps] = useState([])
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
+  const [editingContext, setEditingContext] = useState(false)
+  const [regen, setRegen] = useState(null) // {processed,total} | null
+  const [regenResult, setRegenResult] = useState(null)
   const abortRef = useRef(null)
 
   // Config operativa (modelo + counts). Cacheada por React Query; cae a defaults
@@ -63,6 +67,28 @@ export default function RestaurantRow({ restaurant, orgId }) {
     })
   }
 
+  const regenerate = () => {
+    if (regen) return
+    setRegen({ processed: 0, total: 0 })
+    setRegenResult(null)
+    setError(null)
+    abortRef.current = streamRegenerate(restaurant.id, { model }, (event, data) => {
+      if (event === 'done') {
+        setRegen(null)
+        setRegenResult(data)
+        return
+      }
+      if (data.status === 'error') {
+        setError(data.message)
+        setRegen(null)
+        return
+      }
+      if (typeof data.total === 'number') {
+        setRegen({ processed: data.processed, total: data.total })
+      }
+    })
+  }
+
   return (
     <li className="py-3">
       <div className="flex items-start justify-between gap-3">
@@ -96,14 +122,36 @@ export default function RestaurantRow({ restaurant, orgId }) {
           >
             Carga histórica ({historicalCount})
           </button>
-          {running && (
+          <button
+            onClick={() => setEditingContext((v) => !v)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${editingContext ? 'bg-slate-100 border-slate-300 text-slate-700' : 'border-slate-200 text-slate-600 hover:border-qinsa-blue'}`}
+          >
+            Configurar IA
+          </button>
+          {hasData && (
             <button
-              onClick={() => { abortRef.current?.(); setRunning(false) }}
+              onClick={regenerate}
+              disabled={!!regen || running}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-qinsa-green/50 text-qinsa-green hover:bg-qinsa-green/5 disabled:opacity-50"
+              title="Regenera las respuestas IA de las reseñas ya guardadas con el contexto actual (no usa Apify)"
+            >
+              Regenerar respuestas IA
+            </button>
+          )}
+          {(running || regen) && (
+            <button
+              onClick={() => { abortRef.current?.(); setRunning(false); setRegen(null) }}
               className="px-3 py-1.5 text-xs font-medium rounded-lg text-slate-500 hover:text-slate-700"
             >
               Cancelar
             </button>
           )}
+        </div>
+      )}
+
+      {editingContext && (
+        <div className="mt-3">
+          <ContextEditor restaurantId={restaurant.id} onClose={() => setEditingContext(false)} />
         </div>
       )}
 
@@ -118,6 +166,24 @@ export default function RestaurantRow({ restaurant, orgId }) {
             </div>
           ))}
         </div>
+      )}
+
+      {/* Progreso de regeneración */}
+      {regen && (
+        <div className="mt-2">
+          <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+            <span>Regenerando respuestas IA…</span>
+            <span>{regen.processed}/{regen.total || '?'}</span>
+          </div>
+          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full bg-qinsa-green rounded-full transition-all" style={{ width: regen.total ? `${(regen.processed / regen.total) * 100}%` : '8%' }} />
+          </div>
+        </div>
+      )}
+      {regenResult && (
+        <p className="mt-2 text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-1.5">
+          ✓ {regenResult.regenerated} respuesta(s) IA regenerada(s) con el contexto actual
+        </p>
       )}
 
       {result && (

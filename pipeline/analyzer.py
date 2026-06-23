@@ -106,51 +106,111 @@ def analyze_reviews(reviews: list, restaurant_name: str = "el restaurante", mode
     return result
 
 
+# ── Catálogo de personalización (guiado-híbrido) ───────────────────────────────
+# Los presets son fragmentos de prompt que controlamos y versionamos nosotros:
+# el cliente elige una voz, nunca escribe el prompt. `label`/`description` se
+# exponen al backoffice; `prompt` es la instrucción real que ve Gemini.
+
+TONE_PRESETS = {
+    "cercano_desenfadado": {
+        "label": "Cercano y desenfadado",
+        "description": "Cálido, con gracia y tuteo. Suena humano y nada corporativo.",
+        "prompt": "Habla de TÚ, con cercanía y un punto de buen humor, como quien contesta a un amigo que ha venido a comer. Espontáneo y natural, jamás corporativo ni acartonado.",
+    },
+    "cercano_profesional": {
+        "label": "Cercano y profesional",
+        "description": "Cálido pero contenido, tuteo, sin caer en lo coloquial.",
+        "prompt": "Habla de TÚ, con calidez pero manteniendo un punto cuidado y profesional. Cercano sin ser excesivamente coloquial.",
+    },
+    "elegante": {
+        "label": "Elegante y sobrio",
+        "description": "Refinado, trato de usted, sin emojis.",
+        "prompt": "Trata de USTED, con un tono refinado, sobrio y elegante. Lenguaje cuidado, sin coloquialismos ni florituras.",
+    },
+    "de_barrio": {
+        "label": "De barrio / familiar",
+        "description": "Campechano y de toda la vida, tuteo.",
+        "prompt": "Habla de TÚ, con un tono familiar y campechano de bar de barrio de toda la vida. Sincero, cercano y sin pretensiones.",
+    },
+}
+DEFAULT_PRESET = "cercano_desenfadado"
+
+EMOJI_RULES = {
+    "ninguno":   "No uses ningún emoji.",
+    "sutil":     "Como mucho 1 emoji, y solo si encaja con naturalidad (puede no haber ninguno).",
+    "expresivo": "Puedes usar 1 o 2 emojis con naturalidad, sin abusar.",
+}
+DEFAULT_EMOJI = "sutil"
+
+LANGUAGE_RULES = {
+    "mirror": "Responde SIEMPRE en el mismo idioma en que está escrita la reseña (si la reseña está en inglés, responde en inglés).",
+    "es":     "Responde siempre en español.",
+}
+DEFAULT_LANGUAGE = "mirror"
+
+
+def context_options() -> dict:
+    """Catálogo para el backoffice (presets + niveles), sin exponer los prompts."""
+    return {
+        "tone_presets": [{"key": k, "label": v["label"], "description": v["description"]} for k, v in TONE_PRESETS.items()],
+        "emoji_levels": [{"key": k, "label": k.capitalize()} for k in EMOJI_RULES],
+        "language_modes": [{"key": "mirror", "label": "Idioma del cliente"}, {"key": "es", "label": "Siempre español"}],
+        "defaults": {"tone_preset": DEFAULT_PRESET, "emoji_level": DEFAULT_EMOJI, "language_mode": DEFAULT_LANGUAGE},
+    }
+
+
 def _build_reply_prompt(review: dict, restaurant_name: str, context: dict) -> str:
     """
     Construye el prompt de respuesta a una reseña (función pura, sin red).
 
-    Inyección SEO (keyword injection): si el contexto trae `keywords_objetivo`
-    (lista de términos estratégicos) y la reseña es positiva (4-5★), se instruye
-    a Gemini a integrar orgánicamente 1-2 de esos términos en la respuesta para
-    mejorar el posicionamiento local de la ficha. En reseñas negativas/neutras
-    NO se inyecta (sonaría forzado y oportunista).
+    Compila la configuración estructurada (preset de tono, emojis, idioma, platos,
+    keywords SEO, firma, instrucciones libres) en un prompt de calidad controlada.
+
+    Inyección SEO: si hay `keywords_objetivo` o `dishes` y la reseña es positiva
+    (4-5★), se pide integrar 1-2 términos con naturalidad. En negativas/neutras
+    NO se inyecta (sonaría oportunista).
     """
     ctx = context or {}
-    owner_name   = ctx.get("owner_name") or "El equipo del restaurante"
-    tone         = ctx.get("tone") or "profesional y amable pero con un toque humano y coloquial"
-    instructions = ctx.get("instructions") or ""
-    keywords     = ctx.get("keywords_objetivo") or []
+    preset    = TONE_PRESETS.get(ctx.get("tone_preset") or DEFAULT_PRESET, TONE_PRESETS[DEFAULT_PRESET])
+    emoji     = EMOJI_RULES.get(ctx.get("emoji_level") or DEFAULT_EMOJI, EMOJI_RULES[DEFAULT_EMOJI])
+    language  = LANGUAGE_RULES.get(ctx.get("language_mode") or DEFAULT_LANGUAGE, LANGUAGE_RULES[DEFAULT_LANGUAGE])
+    signature = ctx.get("signature") or ctx.get("owner_name") or f"El equipo de {restaurant_name}"
+    instructions = (ctx.get("instructions") or "").strip()
+    keywords  = ctx.get("keywords_objetivo") or []
+    dishes    = ctx.get("dishes") or []
 
     rating = int(review.get("rating", 0) or 0)
     text   = (review.get("text") or "").strip()
 
-    extra_line = f"- {instructions}" if instructions else ""
-
-    # Regla de inyección SEO solo para reseñas positivas y solo si hay keywords
-    keyword_line = ""
-    if keywords and rating >= 4:
-        kw_str = ", ".join(f'"{k}"' for k in keywords)
-        keyword_line = (
-            f"- SEO (sutil): integra de forma natural UNO o DOS de estos términos si encaja "
-            f"sin forzar — {kw_str}. Que suene espontáneo, NUNCA como lista ni publicidad. "
-            f"Si ninguno encaja con naturalidad, no fuerces ninguno."
+    # Ganchos SEO (keywords + platos) solo en reseñas positivas
+    seo_line = ""
+    if rating >= 4 and (keywords or dishes):
+        terms = ", ".join(f'"{t}"' for t in [*keywords, *dishes])
+        seo_line = (
+            f"- SEO (OPCIONAL, no obligatorio): solo PUEDES mencionar alguno de estos términos —{terms}— "
+            f"si el cliente YA ha aludido a ese tema o plato en su reseña. "
+            f"PROHIBIDO TERMINANTEMENTE afirmar o insinuar que el cliente probó, pidió o disfrutó algo que NO ha nombrado "
+            f"(no inventes platos ni experiencias). Si la reseña es genérica y ningún término encaja con total naturalidad, "
+            f"NO menciones ninguno: es mucho mejor no inyectar que sonar forzado o falso."
         )
+    extra_line = f"- Instrucción del local: {instructions}" if instructions else ""
 
-    return f"""Eres el encargado de responder reseñas de Google Maps de "{restaurant_name}".
-Escribe una respuesta breve y natural a la siguiente reseña.
+    return f"""Eres quien responde las reseñas de Google de "{restaurant_name}". Escribe una respuesta breve, humana y única a esta reseña.
 
-REGLAS ESTRICTAS — sin excepciones:
-- Exactamente 2 o 3 frases. Nunca más.
-- Tono: {tone}. Respeta este tono en cada palabra.
-- PROHIBIDO usar: exclamaciones exageradas ("¡Qué alegría!", "¡Qué maravilla!", "¡Genial!", "¡Increíble!"), lenguaje corporativo ("estimado cliente", "lamentamos los inconvenientes causados", "le transmitimos nuestras disculpas", "no dude en contactarnos"), aperturas genéricas ("Muchas gracias por tu reseña", "Gracias por compartir tu experiencia").
-- Si la reseña es positiva (4-5★): agradece algo concreto que el cliente menciona + invita a volver de forma natural.
-- Si la reseña es negativa (1-2★): reconoce el problema sin excusas + da un paso concreto o compromiso.
-- Si es neutra (3★): equilibra el agradecimiento con el reconocimiento de lo que se puede mejorar.
-- Varía cómo empiezas. No empieces siempre igual.
-{keyword_line}
+VOZ DEL LOCAL: {preset['prompt']}
+
+REGLAS:
+- 2 o 3 frases. Nunca más.
+- {language}
+- Emojis: {emoji}
+- PROHIBIDO: aperturas genéricas ("Muchas gracias por tu reseña", "Gracias por compartir tu experiencia"), lenguaje corporativo ("estimado cliente", "lamentamos los inconvenientes", "no dude en contactarnos") y exclamaciones de relleno.
+- Varía SIEMPRE cómo empiezas; que dos respuestas nunca suenen calcadas.
+- Positiva (4-5★): reconoce algo CONCRETO que menciona el cliente (un plato, un camarero…) e invita a volver con naturalidad.
+- Negativa (1-2★): reconoce el problema sin excusas y ofrece un paso concreto.
+- Neutra (3★): agradece y reconoce lo mejorable, sin ponerte a la defensiva.
+{seo_line}
 {extra_line}
-- Firma al final como: {owner_name}
+- Firma al final como: {signature}
 
 RESEÑA ({rating}★ de 5):
 {text}

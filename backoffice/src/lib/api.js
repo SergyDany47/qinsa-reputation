@@ -49,32 +49,30 @@ export const api = {
     request(`/admin/organizations/${orgId}/restaurants`, { method: 'POST', body }),
   getSettings: () => request('/admin/settings'),
   updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),
+  getContext: (restaurantId) => request(`/admin/restaurants/${restaurantId}/context`),
+  updateContext: (restaurantId, body) =>
+    request(`/admin/restaurants/${restaurantId}/context`, { method: 'PUT', body }),
 }
 
 /**
- * Consume el SSE de /admin/.../ingest con fetch+stream (EventSource no admite el
- * header Authorization). Llama onEvent(eventName, data) por cada evento.
+ * Consume un endpoint SSE con fetch+stream (EventSource no admite el header
+ * Authorization). Llama onEvent(eventName, data) por cada evento.
  * Devuelve una función para abortar.
  */
-export function streamIngest(restaurantId, { maxReviews = 10, generateReplies = true, model = 'gemini-2.5-flash' }, onEvent) {
+export function streamSSE(path, onEvent) {
   const controller = new AbortController()
 
   ;(async () => {
     const { data } = await supabase.auth.getSession()
     const token = data.session?.access_token
-    const params = new URLSearchParams({
-      max_reviews: String(maxReviews),
-      generate_replies: String(generateReplies),
-      model,
-    })
 
     let res
     try {
-      res = await fetch(`${API_URL}/admin/restaurants/${restaurantId}/ingest?${params}`, {
+      res = await fetch(`${API_URL}${path}`, {
         headers: { Authorization: `Bearer ${token}` },
         signal: controller.signal,
       })
-    } catch (e) {
+    } catch {
       if (!controller.signal.aborted) onEvent('message', { status: 'error', message: 'No se pudo conectar con la API' })
       return
     }
@@ -92,17 +90,11 @@ export function streamIngest(restaurantId, { maxReviews = 10, generateReplies = 
 
     while (true) {
       let chunk
-      try {
-        chunk = await reader.read()
-      } catch {
-        break // abortado
-      }
+      try { chunk = await reader.read() } catch { break }
       if (chunk.done) break
       buffer += decoder.decode(chunk.value, { stream: true })
-
       const blocks = buffer.split('\n\n')
-      buffer = blocks.pop() // resto incompleto
-
+      buffer = blocks.pop()
       for (const block of blocks) {
         let event = 'message'
         let dataStr = ''
@@ -118,4 +110,14 @@ export function streamIngest(restaurantId, { maxReviews = 10, generateReplies = 
   })()
 
   return () => controller.abort()
+}
+
+export function streamIngest(restaurantId, { maxReviews = 10, generateReplies = true, model = 'gemini-2.5-flash' }, onEvent) {
+  const params = new URLSearchParams({ max_reviews: String(maxReviews), generate_replies: String(generateReplies), model })
+  return streamSSE(`/admin/restaurants/${restaurantId}/ingest?${params}`, onEvent)
+}
+
+export function streamRegenerate(restaurantId, { onlyUnanswered = true, model = 'gemini-2.5-flash' }, onEvent) {
+  const params = new URLSearchParams({ only_unanswered: String(onlyUnanswered), model })
+  return streamSSE(`/admin/restaurants/${restaurantId}/regenerate-replies?${params}`, onEvent)
 }

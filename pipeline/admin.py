@@ -36,7 +36,14 @@ from loader import (
     upsert_insights,
 )
 from scraper import scrape_reviews
-from analyzer import analyze_reviews, generate_suggested_reply
+from analyzer import (
+    analyze_reviews,
+    generate_suggested_reply,
+    context_options,
+    TONE_PRESETS,
+    EMOJI_RULES,
+    LANGUAGE_RULES,
+)
 from config import ALLOWED_MODELS, get_all_settings
 
 logger = logging.getLogger(__name__)
@@ -143,6 +150,16 @@ class SettingsUpdate(BaseModel):
     default_model: Optional[str] = None
     default_refresh_count: Optional[int] = Field(None, ge=5, le=50)
     default_historical_count: Optional[int] = Field(None, ge=20, le=200)
+
+
+class ContextUpdate(BaseModel):
+    tone_preset: str = "cercano_desenfadado"
+    emoji_level: str = "sutil"
+    language_mode: str = "mirror"
+    signature: Optional[str] = None
+    instructions: Optional[str] = None
+    keywords_objetivo: list = Field(default_factory=list)
+    dishes: list = Field(default_factory=list)
 
 
 _VALID_PLANS = {"internal", "trial", "basic", "growth"}
@@ -304,6 +321,49 @@ async def update_settings(body: SettingsUpdate, admin: dict = Depends(require_pl
     return _settings_payload()
 
 
+# ── Configuración del local (personalización IA) ───────────────────────────────
+
+@router.get("/restaurants/{restaurant_id}/context")
+async def get_context(restaurant_id: str = Path(...), admin: dict = Depends(require_platform_admin)):
+    """Devuelve el contexto de personalización del local + el catálogo de opciones."""
+    res = (
+        supabase.table("restaurant_context")
+        .select("owner_name,signature,tone_preset,emoji_level,language_mode,instructions,keywords_objetivo,dishes")
+        .eq("restaurant_id", restaurant_id).limit(1).execute()
+    )
+    ctx = res.data[0] if res.data else None
+    return {"context": ctx, "options": context_options()}
+
+
+@router.put("/restaurants/{restaurant_id}/context")
+async def put_context(
+    body: ContextUpdate,
+    restaurant_id: str = Path(...),
+    admin: dict = Depends(require_platform_admin),
+):
+    if body.tone_preset not in TONE_PRESETS:
+        raise HTTPException(status_code=422, detail=f"tone_preset inválido. Válidos: {list(TONE_PRESETS)}")
+    if body.emoji_level not in EMOJI_RULES:
+        raise HTTPException(status_code=422, detail=f"emoji_level inválido. Válidos: {list(EMOJI_RULES)}")
+    if body.language_mode not in LANGUAGE_RULES:
+        raise HTTPException(status_code=422, detail=f"language_mode inválido. Válidos: {list(LANGUAGE_RULES)}")
+    if not supabase.table("restaurants").select("id").eq("id", restaurant_id).execute().data:
+        raise HTTPException(status_code=404, detail="Restaurante no encontrado")
+
+    row = {
+        "restaurant_id": restaurant_id,
+        "tone_preset": body.tone_preset,
+        "emoji_level": body.emoji_level,
+        "language_mode": body.language_mode,
+        "signature": (body.signature or "").strip() or None,
+        "instructions": (body.instructions or "").strip() or None,
+        "keywords_objetivo": [str(k).strip() for k in body.keywords_objetivo if str(k).strip()],
+        "dishes": [str(d).strip() for d in body.dishes if str(d).strip()],
+    }
+    res = supabase.table("restaurant_context").upsert(row, on_conflict="restaurant_id").execute()
+    return res.data[0] if res.data else row
+
+
 # ── Ingesta manual (SSE) ───────────────────────────────────────────────────────
 # Operación unificada para los 3 casos del backoffice (misma lógica, 2 perillas):
 #   · Primera ingesta (onboarding):  max_reviews=10,  generate_replies=true
@@ -430,6 +490,71 @@ async def ingest_restaurant(
 
         except Exception as e:
             logger.error("Error en ingest de %s: %s", restaurant_id, e, exc_info=True)
+            msg = str(e)
+            if "429" in msg or "Quota" in msg or "RESOURCE_EXHAUSTED" in msg:
+                msg = "Cuota de IA de Google agotada. Cambia de modelo o inténtalo más tarde."
+            yield _sse({"status": "error", "message": msg})
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+@router.get("/restaurants/{restaurant_id}/regenerate-replies")
+async def regenerate_replies(
+    restaurant_id: str = Path(...),
+    only_unanswered: bool = Query(True, description="Solo reseñas sin responder por el dueño (donde la sugerencia aporta)"),
+    model: str = Query("gemini-2.5-flash"),
+    admin: dict = Depends(require_platform_admin),
+):
+    """
+    Regenera suggested_reply de las reseñas YA almacenadas con el contexto actual
+    (tono, keywords, platos…). NO toca Apify: solo Gemini. Para iterar el tono sin
+    re-scrapear. Progreso vía SSE (procesadas/total).
+    """
+    loop = asyncio.get_running_loop()
+
+    async def generate():
+        try:
+            restaurant = await loop.run_in_executor(None, lambda: get_restaurant_by_id(restaurant_id))
+            if not restaurant:
+                yield _sse({"status": "error", "message": "Restaurante no encontrado."})
+                return
+            name = restaurant.get("name", "Restaurante")
+            context = await loop.run_in_executor(None, lambda: get_restaurant_context(restaurant_id))
+
+            # Reseñas con texto; por defecto solo las no respondidas por el dueño
+            q = (
+                supabase.table("reviews")
+                .select("id,rating,text,author_name,owner_replied")
+                .eq("restaurant_id", restaurant_id)
+                .not_.is_("text", "null").neq("text", "")
+            )
+            if only_unanswered:
+                q = q.eq("owner_replied", False)
+            targets = (q.execute().data) or []
+
+            total = len(targets)
+            if total == 0:
+                yield _sse({"processed": 0, "total": 0, "message": "No hay reseñas que regenerar con este filtro."})
+                yield _sse_named("done", {"regenerated": 0})
+                return
+
+            yield _sse({"processed": 0, "total": total, "message": f"Regenerando {total} respuesta(s) con el contexto actual…"})
+
+            done = 0
+            for r in targets:
+                reply = await loop.run_in_executor(
+                    None, lambda rv=r: generate_suggested_reply(rv, name, context, model)
+                )
+                await loop.run_in_executor(
+                    None, lambda rid=r["id"], rep=reply: supabase.table("reviews").update({"suggested_reply": rep}).eq("id", rid).execute()
+                )
+                done += 1
+                yield _sse({"processed": done, "total": total, "message": f"{done}/{total} regeneradas"})
+
+            yield _sse_named("done", {"regenerated": done})
+
+        except Exception as e:
+            logger.error("Error regenerando respuestas de %s: %s", restaurant_id, e, exc_info=True)
             msg = str(e)
             if "429" in msg or "Quota" in msg or "RESOURCE_EXHAUSTED" in msg:
                 msg = "Cuota de IA de Google agotada. Cambia de modelo o inténtalo más tarde."
