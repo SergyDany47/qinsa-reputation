@@ -305,6 +305,7 @@ Ejemplos de lo que debe quedar documentado aquí:
 ## Estado actual del proyecto (actualizado 2026-06-13)
 
 ### Documentación técnica
+- **`ROADMAP.md`** (raíz) — Plan de trabajo por fases a partir de junio 2026: motor de ingesta autónomo → informes → groundwork de publicación → WhatsApp → publicación Google, + track SEO/GEO transversal. Ver registro [2026-06-19] roadmap.
 - **`PIPELINE_ARCHITECTURE.md`** (raíz del proyecto) — Arquitectura completa del pipeline documentada a partir del código fuente real. Incluye: flujo secuencial paso a paso para cada modo de entrada (`--place-id`, `--restaurant-id`, `--all`, API SSE), contratos de datos exactos (item crudo Apify → scraper output → Gemini JSON → Supabase), listado de dependencias con versiones y uso exacto de cada SDK, mecánica de deduplicación de reseñas, y tabla de responsabilidades por archivo.
 
 ### Componentes implementados y verificados
