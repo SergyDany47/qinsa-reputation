@@ -96,6 +96,7 @@ def run_incremental_ingest(restaurant_id, *, max_reviews=10, generate_replies=Tr
             for r in new_reviews:
                 if r.get("text"):
                     r["suggested_reply"] = generate_suggested_reply(r, name, context, model)
+                    r["reply_status"] = "draft"  # sugerencia recién generada = borrador
 
         emit(step=2, status="done", message=f"{len(new_reviews)} reseña(s) nueva(s)")
 

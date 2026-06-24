@@ -69,6 +69,13 @@ export default function RestaurantRow({ restaurant, orgId }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', orgId] }),
   })
 
+  const publishMutation = useMutation({
+    mutationFn: (body) => api.updatePublishMode(restaurant.id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', orgId] }),
+  })
+  const publishMode = restaurant.publish_mode || 'manual'
+  const autoMinRating = restaurant.auto_publish_min_rating || 5
+
   const hasData = restaurant.review_count != null && restaurant.review_count > 0
   const canIngest = !!restaurant.place_id
 
@@ -255,6 +262,37 @@ export default function RestaurantRow({ restaurant, orgId }) {
             <span className="font-semibold text-slate-600">Informe semanal</span>
           </label>
           <span className="text-slate-400">Último informe: {fmtLast(restaurant.last_report_at)}</span>
+        </div>
+      )}
+
+      {/* Modo de publicación de respuestas (groundwork Fase 3) */}
+      {canIngest && (
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+          <span className="font-semibold text-slate-600">Publicación:</span>
+          <select
+            value={publishMode}
+            disabled={publishMutation.isPending}
+            onChange={(e) => publishMutation.mutate({ publish_mode: e.target.value, auto_publish_min_rating: autoMinRating })}
+            className="px-2 py-1 bg-white border border-slate-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-qinsa-blue"
+          >
+            <option value="manual">Manual (copiar/pegar)</option>
+            <option value="pre_approval">Pre-aprobación</option>
+            <option value="automatic">Automática</option>
+          </select>
+          {publishMode === 'automatic' && (
+            <label className="flex items-center gap-1.5 text-slate-500">
+              auto solo
+              <select
+                value={autoMinRating}
+                disabled={publishMutation.isPending}
+                onChange={(e) => publishMutation.mutate({ publish_mode: publishMode, auto_publish_min_rating: Number(e.target.value) })}
+                className="px-2 py-1 bg-white border border-slate-200 rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-qinsa-blue"
+              >
+                {[5, 4, 3].map((n) => <option key={n} value={n}>≥ {n}★</option>)}
+              </select>
+            </label>
+          )}
+          <span className="text-slate-400">La publicación en Google llega en la Fase 5</span>
         </div>
       )}
 

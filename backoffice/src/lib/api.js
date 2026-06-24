@@ -62,6 +62,8 @@ export const api = {
     request(`/admin/restaurants/${restaurantId}/report?freeze=${freeze}`),
   updateReportSchedule: (restaurantId, body) =>
     request(`/admin/restaurants/${restaurantId}/report-schedule`, { method: 'PUT', body }),
+  updatePublishMode: (restaurantId, body) =>
+    request(`/admin/restaurants/${restaurantId}/publish-mode`, { method: 'PUT', body }),
 }
 
 /**

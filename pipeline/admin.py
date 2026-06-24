@@ -160,6 +160,11 @@ class ReportScheduleUpdate(BaseModel):
     auto_report_enabled: bool = False  # informe semanal automático (cadencia fija)
 
 
+class PublishModeUpdate(BaseModel):
+    publish_mode: str = "manual"                            # manual | pre_approval | automatic
+    auto_publish_min_rating: int = Field(5, ge=1, le=5)     # auto solo para ≥ N★
+
+
 class ContextUpdate(BaseModel):
     tone_preset: str = "cercano_desenfadado"
     emoji_level: str = "sutil"
@@ -172,6 +177,7 @@ class ContextUpdate(BaseModel):
 
 _VALID_PLANS = {"internal", "trial", "basic", "growth"}
 _VALID_ROLES = {"owner", "admin", "member", "viewer"}
+_VALID_PUBLISH_MODES = {"manual", "pre_approval", "automatic"}
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
@@ -216,7 +222,7 @@ async def organization_detail(
 
     restaurants = (
         supabase.table("restaurants")
-        .select("id,name,place_id,profile_status,google_rating,review_count,auto_ingest_enabled,ingest_frequency_hours,last_ingest_at,auto_report_enabled,last_report_at")
+        .select("id,name,place_id,profile_status,google_rating,review_count,auto_ingest_enabled,ingest_frequency_hours,last_ingest_at,auto_report_enabled,last_report_at,publish_mode,auto_publish_min_rating")
         .eq("organization_id", org_id).order("name").execute().data or []
     )
     memberships = (
@@ -423,6 +429,28 @@ async def put_report_schedule(
     return res.data[0] if res.data else {}
 
 
+@router.put("/restaurants/{restaurant_id}/publish-mode")
+async def put_publish_mode(
+    body: PublishModeUpdate,
+    restaurant_id: str = Path(...),
+    admin: dict = Depends(require_platform_admin),
+):
+    """Modo de publicación de respuestas del restaurante (groundwork Fase 3).
+    `automatic` solo aplica a reseñas con rating ≥ auto_publish_min_rating; la
+    publicación real en Google llega en la Fase 5 (ver GBP_SPIKE.md)."""
+    if body.publish_mode not in _VALID_PUBLISH_MODES:
+        raise HTTPException(status_code=422, detail=f"publish_mode inválido. Válidos: {sorted(_VALID_PUBLISH_MODES)}")
+    if not supabase.table("restaurants").select("id").eq("id", restaurant_id).execute().data:
+        raise HTTPException(status_code=404, detail="Restaurante no encontrado")
+    res = (
+        supabase.table("restaurants").update({
+            "publish_mode": body.publish_mode,
+            "auto_publish_min_rating": body.auto_publish_min_rating,
+        }).eq("id", restaurant_id).execute()
+    )
+    return res.data[0] if res.data else {}
+
+
 # ── Historial de ejecuciones de ingesta ────────────────────────────────────────
 
 @router.get("/restaurants/{restaurant_id}/runs")
@@ -592,7 +620,8 @@ async def regenerate_replies(
                     None, lambda rv=r: generate_suggested_reply(rv, name, context, model)
                 )
                 await loop.run_in_executor(
-                    None, lambda rid=r["id"], rep=reply: supabase.table("reviews").update({"suggested_reply": rep}).eq("id", rid).execute()
+                    None, lambda rid=r["id"], rep=reply: supabase.table("reviews")
+                    .update({"suggested_reply": rep, "reply_status": "draft"}).eq("id", rid).execute()
                 )
                 done += 1
                 yield _sse({"processed": done, "total": total, "message": f"{done}/{total} regeneradas"})

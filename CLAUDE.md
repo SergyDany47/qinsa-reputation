@@ -349,6 +349,15 @@ Ejemplos de lo que debe quedar documentado aquí:
 
 ## Registro de decisiones técnicas
 
+### [2026-06-24] Fase 3 — Groundwork: ciclo de vida de respuesta + modo de publicación
+- **Migración `20260624130000_reply_lifecycle.sql`** (aplicada en local). Modela lo que comparten WhatsApp-aprobación y Google-publicación, SIN integrar GBP aún:
+  - `reviews`: `reply_status` (CHECK `none|draft|approved|published|pending|rejected`; `pending`/`rejected` reservados para la moderación de Google de la Fase 5), `reply_approved_at`, `reply_approved_by` (FK `auth.users` ON DELETE SET NULL), `reply_published_at`. **Backfill:** reseñas con `suggested_reply` ya generada → `draft`.
+  - `restaurants`: `publish_mode` (CHECK `manual|pre_approval|automatic`, default `manual`), `auto_publish_min_rating` (1-5, default 5). La `automatic` se gatea por rating por el riesgo de moderación del spike.
+  - Sin nuevas políticas RLS: las columnas caen bajo los GRANT/políticas ya existentes de `reviews` (SELECT+UPDATE de miembros) y `restaurants` (UPDATE owner|admin).
+- **Wiring del pipeline:** `ingest.py` marca cada `suggested_reply` nueva como `draft`; el endpoint de **regenerar** vuelve la reseña a `draft` (regenerar invalida la aprobación previa, comportamiento correcto).
+- **API + UI:** `PUT /admin/restaurants/{id}/publish-mode` (valida modo → 422); el detalle de org devuelve `publish_mode`+`auto_publish_min_rating`. Backoffice `RestaurantRow`: selector "Publicación" (manual/pre-aprobación/automática) + "auto solo ≥ N★" cuando es automática, con aviso de que la publicación en Google llega en la Fase 5.
+- **Verificado sin gastar Apify:** migración aplicada, ruta `publish-mode[PUT]` viva (401 sin token), round-trip real `draft→approved` con el CHECK rechazando estados inválidos, backfill correcto (0 reseñas con sugerencia en `none`), modo de publicación round-trip + default `manual`/5★, build backoffice limpio. **Pendiente Fase 3:** UX de aprobación en la app de cliente (el dueño marca una sugerencia como aprobada — slice 3).
+
 ### [2026-06-24] Fase 3 — Spike de viabilidad GBP (investigación, sin código)
 - **Documento `GBP_SPIKE.md`** (raíz) con hallazgos fundamentados (fuentes citadas, datos jun-2026). Resumen del veredicto:
   - **Publicar el reply es trivial** (1 PUT `v4/.../reviews/{id}/reply`, scope único `business.manage`). El coste NO está ahí.
