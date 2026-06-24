@@ -32,6 +32,7 @@ from loader import (
     supabase,  # cliente Supabase con service_role
     get_restaurant_by_id,
     get_restaurant_context,
+    get_ingest_runs,
 )
 from analyzer import (
     generate_suggested_reply,
@@ -41,7 +42,8 @@ from analyzer import (
     LANGUAGE_RULES,
 )
 from ingest import run_incremental_ingest
-from config import ALLOWED_MODELS, get_all_settings
+from report_generator import generate_and_store
+from config import ALLOWED_MODELS, get_setting, get_all_settings
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +156,10 @@ class ScheduleUpdate(BaseModel):
     ingest_frequency_hours: int = Field(6, ge=3, le=168)  # mín 3h (coste Apify), máx semanal
 
 
+class ReportScheduleUpdate(BaseModel):
+    auto_report_enabled: bool = False  # informe semanal automático (cadencia fija)
+
+
 class ContextUpdate(BaseModel):
     tone_preset: str = "cercano_desenfadado"
     emoji_level: str = "sutil"
@@ -210,7 +216,7 @@ async def organization_detail(
 
     restaurants = (
         supabase.table("restaurants")
-        .select("id,name,place_id,profile_status,google_rating,review_count,auto_ingest_enabled,ingest_frequency_hours,last_ingest_at")
+        .select("id,name,place_id,profile_status,google_rating,review_count,auto_ingest_enabled,ingest_frequency_hours,last_ingest_at,auto_report_enabled,last_report_at")
         .eq("organization_id", org_id).order("name").execute().data or []
     )
     memberships = (
@@ -385,6 +391,72 @@ async def put_schedule(
     return res.data[0] if res.data else {}
 
 
+@router.put("/restaurants/{restaurant_id}/report-schedule")
+async def put_report_schedule(
+    body: ReportScheduleUpdate,
+    restaurant_id: str = Path(...),
+    admin: dict = Depends(require_platform_admin),
+):
+    """Activa/desactiva el informe semanal automático del restaurante."""
+    if not supabase.table("restaurants").select("id").eq("id", restaurant_id).execute().data:
+        raise HTTPException(status_code=404, detail="Restaurante no encontrado")
+    res = (
+        supabase.table("restaurants")
+        .update({"auto_report_enabled": body.auto_report_enabled})
+        .eq("id", restaurant_id).execute()
+    )
+    return res.data[0] if res.data else {}
+
+
+# ── Historial de ejecuciones de ingesta ────────────────────────────────────────
+
+@router.get("/restaurants/{restaurant_id}/runs")
+async def list_ingest_runs(
+    restaurant_id: str = Path(...),
+    limit: int = Query(20, ge=1, le=100),
+    admin: dict = Depends(require_platform_admin),
+):
+    """Historial de ejecuciones (manual + programadas) de un restaurante: cuándo,
+    éxito/error, reseñas recopiladas y nuevas almacenadas."""
+    return get_ingest_runs(restaurant_id, limit=limit)
+
+
+# ── Informes (Fase 2) ──────────────────────────────────────────────────────────
+
+@router.get("/restaurants/{restaurant_id}/report")
+async def restaurant_report(
+    restaurant_id: str = Path(...),
+    freeze: bool = Query(False, description="Si true, congela el snapshot de insights como histórico del período"),
+    admin: dict = Depends(require_platform_admin),
+):
+    """
+    Genera y PERSISTE el informe semanal del restaurante con comparativa vs. la
+    semana anterior: métricas deterministas (volumen, rating, distribución, tasa
+    de respuesta) + narrativa de dirección con Gemini (modelo por defecto de la
+    plataforma). El informe queda guardado en `reports` (upsert por período) para
+    que la app de cliente lo consulte después.
+
+    Con `freeze=true` congela además el snapshot de insights VIVO como fila
+    histórica del período (deuda D1). Si aún no hay insights, `frozen=false`.
+
+    404 si el restaurante no existe; 500 si el cálculo falla.
+    """
+    if not supabase.table("restaurants").select("id").eq("id", restaurant_id).execute().data:
+        raise HTTPException(status_code=404, detail="Restaurante no encontrado")
+
+    model = get_setting("default_model", "gemini-2.5-flash")
+    loop = asyncio.get_running_loop()
+
+    try:
+        # generate_and_store es síncrona y bloqueante (Gemini) → fuera del event loop
+        return await loop.run_in_executor(
+            None, lambda: generate_and_store(restaurant_id, model=model, freeze=freeze)
+        )
+    except Exception as e:
+        logger.error("Error generando informe de %s: %s", restaurant_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el informe: {e}")
+
+
 # ── Ingesta manual (SSE) ───────────────────────────────────────────────────────
 # Operación unificada para los 3 casos del backoffice (misma lógica, 2 perillas):
 #   · Primera ingesta (onboarding):  max_reviews=10,  generate_replies=true
@@ -431,7 +503,8 @@ async def ingest_restaurant(
             try:
                 res = run_incremental_ingest(
                     restaurant_id, max_reviews=max_reviews,
-                    generate_replies=generate_replies, model=model, emit=emit,
+                    generate_replies=generate_replies, model=model,
+                    trigger="manual", emit=emit,
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, {"_done": res})
             except Exception as e:

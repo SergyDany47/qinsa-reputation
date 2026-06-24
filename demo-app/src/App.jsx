@@ -7,6 +7,7 @@ import Login from './pages/Login'
 import Resumen from './pages/Resumen'
 import Empleados from './pages/Empleados'
 import Resenas from './pages/Resenas'
+import Informes from './pages/Informes'
 
 /** Bloquea las rutas privadas: sin sesión → redirige a /login conservando el destino. */
 function RequireAuth({ children }) {
@@ -37,6 +38,7 @@ export default function App() {
               <Route index element={<Resumen />} />
               <Route path="equipo" element={<Empleados />} />
               <Route path="resenas" element={<Resenas />} />
+              <Route path="informes" element={<Informes />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

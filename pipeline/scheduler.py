@@ -20,11 +20,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from loader import supabase
 from config import get_setting
 from ingest import run_incremental_ingest
+from report_generator import generate_and_store, iso_week_bounds
 
 logger = logging.getLogger(__name__)
 
 TICK_MINUTES = 15
-MIN_FREQUENCY_HOURS = 3  # guardarraíl de coste Apify
+MIN_FREQUENCY_HOURS = 3   # guardarraíl de coste Apify
+REPORT_TICK_HOURS = 12    # con qué frecuencia se comprueba si toca informe semanal
 
 _scheduler = None
 
@@ -83,10 +85,48 @@ def tick():
 
     for r in due:
         try:
-            res = run_incremental_ingest(r["id"], max_reviews=count, generate_replies=True, model=model)
+            res = run_incremental_ingest(r["id"], max_reviews=count, generate_replies=True,
+                                         model=model, trigger="scheduled")
             logger.info("Auto-ingesta '%s': %s nueva(s) de %s", r.get("name"), res["inserted"], res["scraped"])
         except Exception as e:
             logger.error("Auto-ingesta falló para '%s': %s", r.get("name"), e)
+
+
+def report_tick():
+    """
+    Genera el informe semanal de la última semana COMPLETA para los restaurantes
+    con auto_report_enabled. Idempotente: si ya existe el informe de ese período,
+    no lo regenera (así la frecuencia del tick no produce duplicados ni gasta IA).
+    """
+    try:
+        rows = (
+            supabase.table("restaurants")
+            .select("id,name,auto_report_enabled")
+            .eq("auto_report_enabled", True).execute().data
+        ) or []
+    except Exception as e:
+        logger.error("Scheduler informes: no se pudieron leer restaurantes: %s", e)
+        return
+    if not rows:
+        return
+
+    cur_start, cur_end = iso_week_bounds()  # última semana completa
+    model = get_setting("default_model", "gemini-2.5-flash")
+
+    for r in rows:
+        try:
+            existing = (
+                supabase.table("reports").select("id")
+                .eq("restaurant_id", r["id"])
+                .eq("period_start", cur_start.isoformat())
+                .limit(1).execute().data
+            )
+            if existing:
+                continue
+            generate_and_store(r["id"], model=model, freeze=True, week_start=cur_start)
+            logger.info("Informe semanal generado para '%s' (%s→%s)", r.get("name"), cur_start, cur_end)
+        except Exception as e:
+            logger.error("Informe semanal falló para '%s': %s", r.get("name"), e)
 
 
 def start_scheduler():
@@ -96,8 +136,11 @@ def start_scheduler():
     _scheduler = BackgroundScheduler(timezone="UTC")
     _scheduler.add_job(tick, "interval", minutes=TICK_MINUTES, id="ingest_tick",
                        max_instances=1, coalesce=True)
+    _scheduler.add_job(report_tick, "interval", hours=REPORT_TICK_HOURS, id="report_tick",
+                       max_instances=1, coalesce=True)
     _scheduler.start()
-    logger.info("Scheduler de ingesta arrancado (tick cada %s min)", TICK_MINUTES)
+    logger.info("Scheduler arrancado (ingesta cada %s min · informes cada %s h)",
+                TICK_MINUTES, REPORT_TICK_HOURS)
 
 
 def stop_scheduler():

@@ -54,6 +54,12 @@ export const api = {
     request(`/admin/restaurants/${restaurantId}/context`, { method: 'PUT', body }),
   updateSchedule: (restaurantId, body) =>
     request(`/admin/restaurants/${restaurantId}/schedule`, { method: 'PUT', body }),
+  getRuns: (restaurantId, { limit = 20 } = {}) =>
+    request(`/admin/restaurants/${restaurantId}/runs?limit=${limit}`),
+  generateReport: (restaurantId, { freeze = true } = {}) =>
+    request(`/admin/restaurants/${restaurantId}/report?freeze=${freeze}`),
+  updateReportSchedule: (restaurantId, body) =>
+    request(`/admin/restaurants/${restaurantId}/report-schedule`, { method: 'PUT', body }),
 }
 
 /**

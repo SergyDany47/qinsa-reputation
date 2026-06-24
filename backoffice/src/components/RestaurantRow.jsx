@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, streamIngest, streamRegenerate } from '../lib/api'
 import ContextEditor from './ContextEditor'
+import RunHistory from './RunHistory'
 
 const FREQ_OPTIONS = [3, 6, 12, 24, 48]
 
@@ -31,6 +32,8 @@ export default function RestaurantRow({ restaurant, orgId }) {
   const [editingContext, setEditingContext] = useState(false)
   const [regen, setRegen] = useState(null) // {processed,total} | null
   const [regenResult, setRegenResult] = useState(null)
+  const [report, setReport] = useState(null) // último informe generado en esta sesión
+  const [showHistory, setShowHistory] = useState(false)
   const abortRef = useRef(null)
 
   // Config operativa (modelo + counts). Cacheada por React Query; cae a defaults
@@ -47,6 +50,19 @@ export default function RestaurantRow({ restaurant, orgId }) {
   const autoEnabled = restaurant.auto_ingest_enabled
   const freq = restaurant.ingest_frequency_hours || 6
 
+  const reportMutation = useMutation({
+    mutationFn: () => api.generateReport(restaurant.id, { freeze: true }),
+    onSuccess: (data) => {
+      setReport(data)
+      qc.invalidateQueries({ queryKey: ['organization', orgId] })
+    },
+  })
+  const reportScheduleMutation = useMutation({
+    mutationFn: (body) => api.updateReportSchedule(restaurant.id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', orgId] }),
+  })
+  const autoReport = restaurant.auto_report_enabled
+
   const hasData = restaurant.review_count != null && restaurant.review_count > 0
   const canIngest = !!restaurant.place_id
 
@@ -62,11 +78,13 @@ export default function RestaurantRow({ restaurant, orgId }) {
         setRunning(false)
         setResult(data)
         qc.invalidateQueries({ queryKey: ['organization', orgId] })
+        qc.invalidateQueries({ queryKey: ['runs', restaurant.id] })
         return
       }
       if (data.status === 'error' && typeof data.step !== 'number') {
         setError(data.message)
         setRunning(false)
+        qc.invalidateQueries({ queryKey: ['runs', restaurant.id] })
         return
       }
       if (typeof data.step === 'number') {
@@ -143,6 +161,13 @@ export default function RestaurantRow({ restaurant, orgId }) {
           >
             Configurar IA
           </button>
+          <button
+            onClick={() => setShowHistory((v) => !v)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${showHistory ? 'bg-slate-100 border-slate-300 text-slate-700' : 'border-slate-200 text-slate-600 hover:border-slate-400'}`}
+            title="Historial de ejecuciones (manual + programadas)"
+          >
+            Historial
+          </button>
           {hasData && (
             <button
               onClick={regenerate}
@@ -151,6 +176,16 @@ export default function RestaurantRow({ restaurant, orgId }) {
               title="Regenera las respuestas IA de las reseñas ya guardadas con el contexto actual (no usa Apify)"
             >
               Regenerar respuestas IA
+            </button>
+          )}
+          {hasData && (
+            <button
+              onClick={() => { setReport(null); reportMutation.mutate() }}
+              disabled={reportMutation.isPending}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-qinsa-blue/50 text-qinsa-blue hover:bg-qinsa-blue/5 disabled:opacity-50"
+              title="Genera y guarda el informe semanal (comparativa vs. semana anterior). Usa Gemini."
+            >
+              {reportMutation.isPending ? 'Generando informe…' : 'Generar informe'}
             </button>
           )}
           {(running || regen) && (
@@ -196,11 +231,34 @@ export default function RestaurantRow({ restaurant, orgId }) {
         </div>
       )}
 
+      {/* Informe semanal automático */}
+      {canIngest && hasData && (
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <span className="relative inline-block w-9 h-5">
+              <input
+                type="checkbox"
+                className="peer sr-only"
+                checked={!!autoReport}
+                disabled={reportScheduleMutation.isPending}
+                onChange={(e) => reportScheduleMutation.mutate({ auto_report_enabled: e.target.checked })}
+              />
+              <span className="absolute inset-0 rounded-full bg-slate-200 peer-checked:bg-qinsa-blue transition-colors" />
+              <span className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4" />
+            </span>
+            <span className="font-semibold text-slate-600">Informe semanal</span>
+          </label>
+          <span className="text-slate-400">Último informe: {fmtLast(restaurant.last_report_at)}</span>
+        </div>
+      )}
+
       {editingContext && (
         <div className="mt-3">
           <ContextEditor restaurantId={restaurant.id} onClose={() => setEditingContext(false)} />
         </div>
       )}
+
+      {showHistory && <RunHistory restaurantId={restaurant.id} />}
 
       {/* Progreso */}
       {(running || steps.length > 0) && !error && (
@@ -236,6 +294,20 @@ export default function RestaurantRow({ restaurant, orgId }) {
       {result && (
         <p className="mt-2 text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-1.5">
           ✓ {result.inserted} reseña(s) nueva(s) de {result.scraped} recopiladas
+        </p>
+      )}
+      {report && (
+        <div className="mt-2 text-xs bg-qinsa-blue/5 border border-qinsa-blue/20 rounded-lg px-3 py-2">
+          <p className="font-semibold text-qinsa-blue mb-1">
+            Informe {report.period?.start} → {report.period?.end} guardado
+            {report.frozen ? ' · snapshot congelado' : ''}
+          </p>
+          <p className="text-slate-600 whitespace-pre-line">{report.summary}</p>
+        </div>
+      )}
+      {reportMutation.isError && (
+        <p className="mt-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-1.5">
+          {reportMutation.error?.message || 'No se pudo generar el informe'}
         </p>
       )}
       {error && (

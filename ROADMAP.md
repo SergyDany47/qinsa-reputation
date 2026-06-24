@@ -39,12 +39,16 @@ informes, con SEO local potenciado por las respuestas y el flujo de reseñas.
 - **Tecnología del scheduler — DECIDIDO: APScheduler dentro de FastAPI** (lógica en nuestro código, sin infra extra). Requiere que el backend esté siempre en marcha. Se descartaron pg_cron (parte la lógica DB/backend) y n8n (infra extra) para esta fase.
 - **Guardarraíl de coste:** frecuencia mínima 3-6 h configurable; horaria desaconsejada (overkill + coste Apify).
 
-## Fase 2 — Generador de informes (semanal + comparativa)  🚧 EN CURSO (esqueleto 2026-06-23)
-**Objetivo:** informe con insights de la semana + **comparativa con la anterior** (sentimiento, volumen, rating, temas, staff). Botón manual ahora; programado semanal después.
-- **Deps:** D1 (históricos) ✅ + Fase 1 (scheduler para la versión automática) ✅.
-- **Hecho:** `pipeline/report_generator.py` (esqueleto) — ventanas ISO semiabiertas, métricas deterministas desde `reviews` (volumen, rating, distribución, positivas/negativas, tasa de respuesta), comparativa de deltas vs. semana anterior, `freeze_period` sobre `snapshot_insights`. Verificado sin gastar IA.
-- **Pendiente:** narrativa con Gemini (hoy stub determinista marcado TODO), endpoint en `admin.py`, disparo programado (scheduler Fase 1) y vista en backoffice/cliente.
-- Salida estructurada reutilizable por el canal (WhatsApp/email) de la Fase 4.
+## Fase 2 — Generador de informes (semanal + comparativa)  ✅ HECHA (2026-06-24)
+**Objetivo:** informe con insights de la semana + **comparativa con la anterior** (sentimiento, volumen, rating, temas, staff). Botón manual + programado semanal.
+- **Deps:** D1 (históricos) ✅ + Fase 1 (scheduler) ✅.
+- **Motor** `pipeline/report_generator.py` — ventanas ISO semiabiertas, métricas deterministas desde `reviews`, comparativa de deltas, narrativa real con Gemini en 3 viñetas (Diagnóstico de Flujo · Auditoría de Sala · Acción SEO/GEO) con fallback determinista.
+- **Persistencia** — tabla `reports` (migración `20260623120000`), op canónica `generate_and_store` compartida por botón y scheduler.
+- **API** — `GET /admin/restaurants/{id}/report?freeze=` (genera+guarda) · `PUT …/report-schedule` (toggle semanal).
+- **Scheduler** — job `report_tick` (cada 12h, idempotente por período).
+- **Backoffice** — botón "Generar informe" + toggle "Informe semanal".
+- **App de cliente** — `pages/Informes.jsx`: lee `reports` por RLS, selector de semanas + detalle (narrativa + métricas con variación + distribución + foco operativo).
+- Salida estructurada (`payload` jsonb) reutilizable por el canal (WhatsApp/email) de la Fase 4.
 
 ## Fase 3 — Groundwork de publicación y aprobación
 **Objetivo:** preparar el terreno (lo comparten WhatsApp y Google).

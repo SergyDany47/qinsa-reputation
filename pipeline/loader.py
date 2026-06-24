@@ -20,6 +20,7 @@ Modelo de insights (deuda D1 saldada — ver CLAUDE.md [2026-06-23]):
 """
 import logging
 import os
+from datetime import datetime, timezone
 
 from supabase import create_client
 from dotenv import load_dotenv
@@ -237,6 +238,28 @@ def snapshot_insights(restaurant_id: str, insights: dict,
         raise
 
 
+def get_live_insights(restaurant_id: str):
+    """
+    Snapshot VIVO de insights (fila con period_start IS NULL). Es el análisis más
+    reciente del restaurante: sentimiento, staff_mentions, problemas/elogios
+    recurrentes. Lo consume el generador de informes para su narrativa.
+    Devuelve None si aún no se ha generado ningún insight.
+    """
+    try:
+        resp = (
+            supabase.table("insights")
+            .select("*")
+            .eq("restaurant_id", restaurant_id)
+            .is_("period_start", "null")
+            .limit(1)
+            .execute()
+        )
+        return resp.data[0] if resp.data else None
+    except Exception as e:
+        logger.error(f"Error obteniendo insights vivos para {restaurant_id}: {str(e)}")
+        raise
+
+
 def get_insights_history(restaurant_id: str, limit: int = 12) -> list:
     """
     Devuelve los snapshots históricos (period_start NO nulo) de un restaurante,
@@ -313,6 +336,92 @@ def get_restaurant_context(restaurant_id: str):
     except Exception as e:
         logger.warning(f"No se pudo cargar restaurant_context para {restaurant_id}: {str(e)}")
         return None
+
+
+def save_report(restaurant_id: str, report: dict) -> dict:
+    """
+    Persiste un informe semanal (upsert por restaurante+período → idempotente para
+    el scheduler y re-generable desde el botón manual). Actualiza `last_report_at`.
+
+    Returns:
+        La fila guardada (dict).
+    """
+    period = report.get("period") or {}
+    row = {
+        "restaurant_id": restaurant_id,
+        "period_start": period.get("start"),
+        "period_end": period.get("end"),
+        "summary": report.get("summary"),
+        "payload": report,
+        "model_used": report.get("model_used"),
+    }
+    try:
+        resp = (
+            supabase.table("reports")
+            .upsert(row, on_conflict="restaurant_id,period_start")
+            .execute()
+        )
+        supabase.table("restaurants").update(
+            {"last_report_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("id", restaurant_id).execute()
+        logger.info(f"Informe guardado {row['period_start']}→{row['period_end']} para {restaurant_id}")
+        return resp.data[0] if resp.data else row
+    except Exception as e:
+        logger.error(f"Error guardando informe para {restaurant_id}: {str(e)}")
+        raise
+
+
+def get_reports(restaurant_id: str, limit: int = 12) -> list:
+    """Informes de un restaurante, del más reciente al más antiguo (para la vista de cliente)."""
+    try:
+        resp = (
+            supabase.table("reports")
+            .select("*")
+            .eq("restaurant_id", restaurant_id)
+            .order("period_start", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as e:
+        logger.error(f"Error obteniendo informes para {restaurant_id}: {str(e)}")
+        raise
+
+
+def log_ingest_run(restaurant_id: str, trigger: str, status: str, *,
+                   scraped=None, inserted=None, error=None) -> None:
+    """
+    Registra una ejecución de ingesta en `ingest_runs`. NUNCA lanza: un fallo al
+    registrar no debe romper (ni enmascarar) la ingesta en sí.
+    """
+    try:
+        supabase.table("ingest_runs").insert({
+            "restaurant_id": restaurant_id,
+            "trigger": trigger,
+            "status": status,
+            "reviews_scraped": scraped,
+            "reviews_inserted": inserted,
+            "error_message": (error or None) and str(error)[:1000],
+        }).execute()
+    except Exception as e:
+        logger.error(f"No se pudo registrar ingest_run para {restaurant_id}: {str(e)}")
+
+
+def get_ingest_runs(restaurant_id: str, limit: int = 20) -> list:
+    """Historial de ejecuciones de un restaurante, de la más reciente a la más antigua."""
+    try:
+        resp = (
+            supabase.table("ingest_runs")
+            .select("*")
+            .eq("restaurant_id", restaurant_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as e:
+        logger.error(f"Error obteniendo ingest_runs para {restaurant_id}: {str(e)}")
+        raise
 
 
 def get_prospects() -> list:

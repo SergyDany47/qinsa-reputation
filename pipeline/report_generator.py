@@ -6,31 +6,42 @@ Produce un informe de un restaurante para un período (semana por defecto) con
 distribución, tasa de respuesta, sentimiento y temas/staff.
 
 Filosofía de diseño (ver ROADMAP.md Fase 2 + CLAUDE.md [2026-06-23]):
-  - Las MÉTRICAS son DETERMINISTAS: se computan desde la tabla `reviews` y los
-    snapshots de `insights`. No gastan IA y son testeables en local.
+  - Las MÉTRICAS son DETERMINISTAS: se computan desde la tabla `reviews` y el
+    snapshot vivo de `insights`. No gastan IA y son testeables en local.
   - La NARRATIVA en lenguaje natural (el texto que verá el dueño / irá a
-    WhatsApp en la Fase 4) es lo único que usará Gemini → hoy es un STUB
-    determinista marcado con TODO, para no gastar cuota mientras se valida la
-    estructura.
+    WhatsApp en la Fase 4) la redacta Gemini (gemini-2.5-flash) con enfoque
+    "Operativo-Accionable y de Dirección": síntesis de consultor, sin relleno
+    corporativo. Si la IA falla, se cae con elegancia a un resumen determinista
+    (`_fallback_summary`) — el informe estructurado nunca se rompe por la IA.
   - La salida es un dict estructurado y serializable, reutilizable por el canal
     de entrega (Fase 4) y por el frontend.
 
-Estado: esqueleto lógico. Pendiente de la Fase 2: enriquecer `_narrative` con
-Gemini, decidir disparo (manual ahora, programado semanal con el scheduler de
-la Fase 1) y exponer un endpoint en admin.py.
+Pendiente de la Fase 2: exponer un endpoint en admin.py y disparo programado
+(scheduler de la Fase 1, cron semanal).
 """
+import json
 import logging
+import os
 from datetime import date, datetime, timedelta
 from typing import Optional
+
+from google import genai
+from google.genai import types
+from dotenv import load_dotenv
+from tenacity import retry, wait_exponential, stop_after_attempt
 
 from loader import (
     get_reviews_in_period,
     get_insights_history,
+    get_live_insights,
     snapshot_insights,
+    save_report,
 )
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
+MODEL = "gemini-2.5-flash"
 POSITIVE_THRESHOLD = 4   # rating >= → positiva
 NEGATIVE_THRESHOLD = 2   # rating <= → negativa
 
@@ -115,42 +126,127 @@ def _compare(current: dict, previous: dict) -> dict:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Narrativa (STUB — pendiente de Gemini en la Fase 2)
+# Narrativa
 # ──────────────────────────────────────────────────────────────────────────
-def _narrative(report: dict) -> str:
+def _arrow(x) -> str:
+    if x is None:
+        return "—"
+    return f"▲{x}" if x > 0 else (f"▼{abs(x)}" if x < 0 else "=")
+
+
+def _fallback_summary(report: dict) -> str:
     """
-    TODO (Fase 2): generar con Gemini un resumen cercano y accionable a partir
-    del dict `report` (mismo tono/personalización que las respuestas). De momento
-    devuelve un resumen templado determinista — útil y testeable sin gastar IA.
+    Resumen determinista (sin IA). Se usa si Gemini falla o no está configurado,
+    para que el informe nunca quede sin texto.
     """
     cur = report["current"]
     d = report["deltas"]
     if cur["count"] == 0:
         return "Sin reseñas nuevas esta semana."
-
-    def arrow(x):
-        if x is None:
-            return "—"
-        return f"▲{x}" if x > 0 else (f"▼{abs(x)}" if x < 0 else "=")
-
     return (
-        f"{cur['count']} reseñas nuevas ({arrow(d['count'])} vs. semana anterior), "
-        f"rating medio {cur['avg_rating']} ({arrow(d['avg_rating'])}), "
+        f"{cur['count']} reseñas nuevas ({_arrow(d['count'])} vs. semana anterior), "
+        f"rating medio {cur['avg_rating']} ({_arrow(d['avg_rating'])}), "
         f"{cur['positive']} positivas / {cur['negative']} negativas, "
-        f"tasa de respuesta {cur['response_rate']}% ({arrow(d['response_rate'])})."
+        f"tasa de respuesta {cur['response_rate']}% ({_arrow(d['response_rate'])})."
     )
+
+
+def _build_narrative_prompt(report: dict) -> str:
+    """
+    Compila el prompt de la narrativa (función pura, sin red). Serializa las
+    métricas y el snapshot de insights para que el modelo razone sobre datos,
+    no sobre impresiones.
+    """
+    payload = {
+        "periodo": report.get("period"),
+        "periodo_anterior": report.get("previous_period"),
+        "metricas_semana": report.get("current"),
+        "metricas_semana_anterior": report.get("previous"),
+        "deltas_vs_anterior": report.get("deltas"),
+        "insights": report.get("insights") or {},
+    }
+    datos = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    return f"""Eres un consultor senior de restauración que entrega un parte semanal a la
+DIRECCIÓN de un restaurante. Tu lector es el dueño/gerente: tiene poco tiempo y
+quiere saber qué está pasando y qué hacer, no que le doren la píldora.
+
+DATOS DE LA SEMANA (ya calculados, no recalcules; los deltas comparan con la semana anterior):
+{datos}
+
+REDACTA una síntesis ejecutiva ULTRA-CONCISA con EXACTAMENTE estas 3 viñetas, en este orden y con estos títulos literales en negrita:
+
+- **Diagnóstico de Flujo:** lee volumen de reseñas, su delta, el rating medio y su tendencia, y el balance positivas/negativas. ¿Sube, baja o se estanca el flujo y la satisfacción? Sé cuantitativo.
+- **Auditoría de Sala (Staff y Cocina):** cruza staff_mentions y los problemas/elogios recurrentes. Señala por nombre al personal destacado o problemático y los focos operativos concretos (cocina, espera, servicio). Si no hay datos de staff, dilo en media línea y céntrate en lo operativo.
+- **Acción SEO/GEO Recomendada:** UNA palanca concreta y ejecutable esta semana para mejorar posicionamiento local (responder X reseñas pendientes, reforzar tal keyword/plato en las respuestas, pedir reseñas tras un pico positivo…). Que sea accionable, no teoría.
+
+REGLAS DE ESTILO:
+- Tono de consultor directo y profesional. Cero relleno de marketing ("nos esforzamos cada día", "tu opinión nos importa").
+- Cada viñeta: 1-2 frases. Apóyate en cifras de los datos.
+- Si un dato no existe, no lo inventes: trabaja con lo que hay.
+- Responde en español.
+
+Devuelve SOLO las 3 viñetas. Sin introducción, sin cierre, sin explicaciones."""
+
+
+@retry(wait=wait_exponential(multiplier=2, min=3, max=30), stop=stop_after_attempt(4))
+def _gemini_narrative(prompt: str, model: str) -> str:
+    """Llama a Gemini para la narrativa. Reintentos con backoff (tenacity)."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY no está definido en el entorno")
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            temperature=0.4,  # síntesis de consultor: ni mecánica ni fabuladora
+        ),
+    )
+    return response.text.strip()
+
+
+def _narrative(report: dict, model: str = MODEL) -> str:
+    """
+    Narrativa "Operativo-Accionable y de Dirección" vía Gemini. Si la IA falla o
+    no está configurada, cae al resumen determinista — el informe nunca se rompe.
+    """
+    if report.get("current", {}).get("count", 0) == 0:
+        return "Sin reseñas nuevas esta semana."
+    try:
+        return _gemini_narrative(_build_narrative_prompt(report), model)
+    except Exception as e:
+        logger.error(f"Narrativa IA no disponible, usando resumen determinista: {e}")
+        return _fallback_summary(report)
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # Orquestación
 # ──────────────────────────────────────────────────────────────────────────
-def build_weekly_report(restaurant_id: str, week_start: Optional[date] = None) -> dict:
+def _insights_digest(restaurant_id: str) -> dict:
+    """Extrae del snapshot vivo solo lo que alimenta la narrativa de dirección."""
+    ins = get_live_insights(restaurant_id) or {}
+    return {
+        "sentiment_score": ins.get("sentiment_score"),
+        "staff_mentions": ins.get("staff_mentions") or [],
+        "recurring_issues": ins.get("recurring_issues") or [],
+        "recurring_praise": ins.get("recurring_praise") or [],
+        "top_problems": ins.get("top_problems") or [],
+        "top_strengths": ins.get("top_strengths") or [],
+        "keywords": ins.get("keywords") or [],
+    }
+
+
+def build_weekly_report(restaurant_id: str, week_start: Optional[date] = None,
+                        model: str = MODEL, narrative: bool = True) -> dict:
     """
     Construye el informe semanal con comparativa contra la semana anterior.
     `week_start` (date) fija la semana; por defecto, la última semana completa.
 
-    Devuelve un dict estructurado y serializable. NO gasta IA (la narrativa es
-    el stub determinista). NO congela nada: usar `freeze_period(...)` para eso.
+    La narrativa la redacta Gemini (modelo `model`); pásalo `narrative=False` para
+    obtener solo las métricas deterministas sin gastar IA. NO congela nada: usar
+    `freeze_period(...)` para eso.
     """
     cur_start, cur_end = iso_week_bounds(week_start)
     prev_start, prev_end = previous_window(cur_start, cur_end)
@@ -168,9 +264,36 @@ def build_weekly_report(restaurant_id: str, week_start: Optional[date] = None) -
         "current": current,
         "previous": previous,
         "deltas": _compare(current, previous),
+        "insights": _insights_digest(restaurant_id),
         "generated_at": datetime.utcnow().isoformat() + "Z",
     }
-    report["summary"] = _narrative(report)
+    report["summary"] = _narrative(report, model) if narrative else _fallback_summary(report)
+    return report
+
+
+def generate_and_store(restaurant_id: str, *, model: str = MODEL,
+                       freeze: bool = True, week_start: Optional[date] = None) -> dict:
+    """
+    Op canónica de informe: construye el informe semanal, opcionalmente congela el
+    snapshot de insights del período (`freeze`) y lo PERSISTE en `reports`. La usan
+    por igual el botón manual del backoffice y el scheduler → mismo resultado.
+
+    Devuelve el informe con `report_id` y, si procede, `frozen`.
+    """
+    report = build_weekly_report(restaurant_id, week_start=week_start, model=model)
+    report["model_used"] = model
+
+    if freeze:
+        live = get_live_insights(restaurant_id)
+        if live:
+            p = report["period"]
+            snapshot_insights(restaurant_id, live, p["start"], p["end"])
+            report["frozen"] = True
+        else:
+            report["frozen"] = False
+
+    saved = save_report(restaurant_id, report)
+    report["report_id"] = saved.get("id")
     return report
 
 
@@ -189,5 +312,6 @@ __all__ = [
     "iso_week_bounds",
     "previous_window",
     "build_weekly_report",
+    "generate_and_store",
     "freeze_period",
 ]
