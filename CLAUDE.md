@@ -349,6 +349,12 @@ Ejemplos de lo que debe quedar documentado aquí:
 
 ## Registro de decisiones técnicas
 
+### [2026-06-24] Fase 3 — UX de aprobación en la app de cliente (slice 3, cierra Fase 3)
+- **`demo-app/src/pages/Resenas.jsx`:** en cada reseña con sugerencia IA (y sin respuesta del dueño en Google), botón **"Aprobar" ↔ "✓ Aprobada"** que mueve `reply_status` `draft↔approved`. Update **optimista** + persistencia **por RLS** (`supabase.from('reviews').update(...)`, el miembro tiene UPDATE por la política `review_member_update`); setea `reply_approved_at` y `reply_approved_by` (uid del usuario vía `useAuth`). Si el update falla, revierte el estado local.
+- **Workflow:** filtro nuevo **"Por aprobar"** (sugerencia en estado != approved, sin responder) + contador "N aprobadas" en la cabecera. Útil ya para el flujo manual (curar qué respuestas están listas para copiar/pegar); base del auto-publish de la Fase 5.
+- **Verificado:** build demo-app limpio; **RLS ejercitada como el usuario real** (`dueno@elkiosko.com`): aprueba draft→approved y persiste `reply_approved_by`; `anon` → permission denied; revertido tras la prueba. La política `review_member_update` (USING+WITH CHECK sobre `user_can_view_restaurant`) acepta el update porque no cambia `restaurant_id`.
+- **Fase 3 COMPLETA:** spike GBP + modelo de estados/modo + UX de aprobación. Lo que falta para responder en Google de verdad (OAuth por cliente, tokens, account/location/review ids, publicación real) es Fase 5, deliberadamente diferido (ver `GBP_SPIKE.md`).
+
 ### [2026-06-24] Fase 3 — Groundwork: ciclo de vida de respuesta + modo de publicación
 - **Migración `20260624130000_reply_lifecycle.sql`** (aplicada en local). Modela lo que comparten WhatsApp-aprobación y Google-publicación, SIN integrar GBP aún:
   - `reviews`: `reply_status` (CHECK `none|draft|approved|published|pending|rejected`; `pending`/`rejected` reservados para la moderación de Google de la Fase 5), `reply_approved_at`, `reply_approved_by` (FK `auth.users` ON DELETE SET NULL), `reply_published_at`. **Backfill:** reseñas con `suggested_reply` ya generada → `draft`.

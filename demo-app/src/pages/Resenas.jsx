@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { useRestaurant } from '../lib/RestaurantContext'
+import { useAuth } from '../lib/AuthContext'
 import Spinner from '../components/Spinner'
 import NoRestaurant from '../components/NoRestaurant'
 import { Card, PageHeader, EmptyState } from '../components/ui'
@@ -22,13 +23,14 @@ function Stars({ rating }) {
 
 const fmtDate = (d) => d ? new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(d)) : ''
 
-function ReviewCard({ review }) {
+function ReviewCard({ review, onApprove }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
   const text = review.text || ''
   const isLong = text.length > 240
   const shown = !isLong || expanded ? text : text.slice(0, 240) + '…'
   const rating = review.rating || 0
+  const approved = review.reply_status === 'approved'
 
   const copy = async () => {
     try {
@@ -72,14 +74,26 @@ function ReviewCard({ review }) {
       ) : review.suggested_reply ? (
         /* Sugerencia IA lista para usar */
         <div className="mt-3 pt-3 border-t border-slate-100">
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
               <svg className="w-3.5 h-3.5 text-ocean-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
-              <span className="text-xs text-ocean-700 font-bold">Respuesta sugerida</span>
+              <span className="text-xs text-ocean-700 font-bold truncate">Respuesta sugerida</span>
+              {approved && (
+                <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Aprobada</span>
+              )}
             </div>
-            <button onClick={copy} className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${copied ? 'bg-emerald-100 text-emerald-700' : 'bg-ocean-600 text-white hover:bg-ocean-700'}`}>
-              {copied ? '✓ Copiada' : 'Copiar'}
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => onApprove(review.id, !approved)}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-colors ${approved ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-ocean-300 text-ocean-700 hover:bg-ocean-50'}`}
+                title={approved ? 'Quitar aprobación' : 'Marcar como aprobada'}
+              >
+                {approved ? '✓ Aprobada' : 'Aprobar'}
+              </button>
+              <button onClick={copy} className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${copied ? 'bg-emerald-100 text-emerald-700' : 'bg-ocean-600 text-white hover:bg-ocean-700'}`}>
+                {copied ? '✓ Copiada' : 'Copiar'}
+              </button>
+            </div>
           </div>
           <p className="text-sm text-slate-600 leading-relaxed pl-5">{review.suggested_reply}</p>
         </div>
@@ -92,6 +106,7 @@ function ReviewCard({ review }) {
 
 const STATUS_FILTERS = [
   { key: 'all', label: 'Todas' },
+  { key: 'to_approve', label: 'Por aprobar' },
   { key: 'needs_reply', label: 'Sin responder' },
   { key: 'positive', label: 'Positivas (4-5★)' },
   { key: 'negative', label: 'Negativas (1-2★)' },
@@ -105,6 +120,7 @@ const DATE_FILTERS = [
 
 export default function Resenas() {
   const { restaurant, loading: loadingRestaurant } = useRestaurant()
+  const { user } = useAuth()
   const [reviews, setReviews] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
@@ -114,11 +130,26 @@ export default function Resenas() {
     if (!restaurant) return
     setLoading(true)
     const { data } = await supabase.from('reviews')
-      .select('id,author_name,rating,text,review_date,owner_replied,reply_text,suggested_reply')
+      .select('id,author_name,rating,text,review_date,owner_replied,reply_text,suggested_reply,reply_status')
       .eq('restaurant_id', restaurant.id).order('review_date', { ascending: false }).limit(100)
     setReviews(data || [])
     setLoading(false)
   }, [restaurant?.id])
+
+  // Aprobar / desaprobar una sugerencia (draft ↔ approved). Update optimista
+  // y persistencia por RLS (el miembro tiene UPDATE sobre sus reviews).
+  const setApproval = useCallback(async (reviewId, approve) => {
+    const newStatus = approve ? 'approved' : 'draft'
+    const prevStatus = approve ? 'draft' : 'approved'
+    setReviews(prev => prev.map(r => r.id === reviewId ? { ...r, reply_status: newStatus } : r))
+    const patch = approve
+      ? { reply_status: 'approved', reply_approved_at: new Date().toISOString(), reply_approved_by: user?.id || null }
+      : { reply_status: 'draft', reply_approved_at: null, reply_approved_by: null }
+    const { error } = await supabase.from('reviews').update(patch).eq('id', reviewId)
+    if (error) {
+      setReviews(prev => prev.map(r => r.id === reviewId ? { ...r, reply_status: prevStatus } : r))
+    }
+  }, [user?.id])
 
   useEffect(() => {
     if (!restaurant) { setLoading(false); return }
@@ -132,6 +163,7 @@ export default function Resenas() {
       if (dateFilter === '3_months' && days > 90) return false
       if (dateFilter === '1_year' && days > 365) return false
     }
+    if (filter === 'to_approve') return !r.owner_replied && r.suggested_reply && r.reply_status !== 'approved'
     if (filter === 'needs_reply') return !r.owner_replied && r.text
     if (filter === 'positive') return r.rating >= 4
     if (filter === 'negative') return r.rating <= 2
@@ -143,6 +175,7 @@ export default function Resenas() {
 
   const replied = reviews.filter(r => r.owner_replied).length
   const suggestions = reviews.filter(r => r.suggested_reply && !r.owner_replied).length
+  const approvedCount = reviews.filter(r => r.suggested_reply && !r.owner_replied && r.reply_status === 'approved').length
 
   return (
     <div>
@@ -151,6 +184,7 @@ export default function Resenas() {
           <span>{reviews.length} reseñas</span>
           <span>{replied} respondidas</span>
           {suggestions > 0 && <span className="text-ocean-600 font-medium">{suggestions} sugerencia{suggestions !== 1 ? 's' : ''} lista{suggestions !== 1 ? 's' : ''}</span>}
+          {approvedCount > 0 && <span className="text-emerald-600 font-medium">{approvedCount} aprobada{approvedCount !== 1 ? 's' : ''}</span>}
         </>
       )} />
 
@@ -184,7 +218,7 @@ export default function Resenas() {
         <EmptyState title="No hay resultados" subtitle="Prueba con otro filtro." />
       ) : (
         <div className="grid lg:grid-cols-2 gap-3 lg:gap-4 items-start">
-          {filtered.map(r => <ReviewCard key={r.id} review={r} />)}
+          {filtered.map(r => <ReviewCard key={r.id} review={r} onApprove={setApproval} />)}
         </div>
       )}
     </div>

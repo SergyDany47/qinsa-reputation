@@ -50,12 +50,12 @@ informes, con SEO local potenciado por las respuestas y el flujo de reseñas.
 - **App de cliente** — `pages/Informes.jsx`: lee `reports` por RLS, selector de semanas + detalle (narrativa + métricas con variación + distribución + foco operativo).
 - Salida estructurada (`payload` jsonb) reutilizable por el canal (WhatsApp/email) de la Fase 4.
 
-## Fase 3 — Groundwork de publicación y aprobación  🚧 EN CURSO
+## Fase 3 — Groundwork de publicación y aprobación  ✅ HECHA (2026-06-24)
 **Objetivo:** preparar el terreno (lo comparten WhatsApp y Google).
-- **Spike de viabilidad GBP ✅ HECHO (2026-06-24, `GBP_SPIKE.md`):** publicar el reply es trivial; la barrera real es el *access gate* de Google (cuota 0 → form → aprobación manual de semanas + verificación OAuth) y la **moderación 2026** (PENDING/REJECTED → auto-publish arriesgado). Veredicto: manual primero, integración GBP diferida a Fase 5.
-- **Hecho ✅ (2026-06-24):** modelo de estados de respuesta `none→draft→approved→published` (+ `pending`/`rejected` reservados) en `reviews`, y modo de publicación por restaurante `manual|pre_approval|automatic` (default `manual`, auto gateada por rating) — migración `20260624130000`, wiring de ingest/regenerate, endpoint `publish-mode` + selector en backoffice.
-- **Pendiente:** UX de aprobación (el dueño marca una sugerencia como aprobada) — slice 3.
-- Campos GBP (tokens OAuth, account/location/review ids) se difieren a la Fase 5.
+- **Spike de viabilidad GBP ✅ (`GBP_SPIKE.md`):** publicar el reply es trivial; la barrera real es el *access gate* de Google (cuota 0 → form → aprobación manual de semanas + verificación OAuth) y la **moderación 2026** (PENDING/REJECTED → auto-publish arriesgado). Veredicto: manual primero, integración GBP diferida a Fase 5.
+- **Modelo de estados ✅:** `reviews.reply_status` `none→draft→approved→published` (+ `pending`/`rejected` reservados) y `restaurants.publish_mode` `manual|pre_approval|automatic` (default `manual`, auto gateada por rating) — migración `20260624130000`, wiring de ingest/regenerate, endpoint `publish-mode` + selector en backoffice.
+- **UX de aprobación ✅:** en la app de cliente (`Resenas.jsx`), botón Aprobar/✓ Aprobada (draft↔approved) por RLS + filtro "Por aprobar" + contador.
+- Campos GBP (tokens OAuth, account/location/review ids, publicación real) se difieren a la **Fase 5**.
 
 ## Fase 4 — WhatsApp (canal de entrega)
 **Objetivo:** entregar por WhatsApp lo que ya producen las fases previas.
