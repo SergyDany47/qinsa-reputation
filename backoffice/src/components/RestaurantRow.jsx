@@ -34,6 +34,7 @@ export default function RestaurantRow({ restaurant, orgId }) {
   const [regenResult, setRegenResult] = useState(null)
   const [report, setReport] = useState(null) // último informe generado en esta sesión
   const [showHistory, setShowHistory] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const abortRef = useRef(null)
 
   // Config operativa (modelo + counts). Cacheada por React Query; cae a defaults
@@ -62,6 +63,11 @@ export default function RestaurantRow({ restaurant, orgId }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', orgId] }),
   })
   const autoReport = restaurant.auto_report_enabled
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.deleteRestaurant(restaurant.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['organization', orgId] }),
+  })
 
   const hasData = restaurant.review_count != null && restaurant.review_count > 0
   const canIngest = !!restaurant.place_id
@@ -313,6 +319,41 @@ export default function RestaurantRow({ restaurant, orgId }) {
       {error && (
         <p className="mt-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-1.5">{error}</p>
       )}
+
+      {/* Borrado (destructivo, con confirmación inline) */}
+      <div className="mt-3 pt-3 border-t border-slate-100">
+        {confirmDelete ? (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-slate-600">
+              ¿Borrar <b>{restaurant.name}</b> y todos sus datos (reseñas, insights, informes)? No se puede deshacer.
+            </span>
+            <button
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="px-2.5 py-1 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-50"
+            >
+              {deleteMutation.isPending ? 'Borrando…' : 'Sí, borrar'}
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleteMutation.isPending}
+              className="px-2.5 py-1 rounded-lg text-slate-500 hover:text-slate-700"
+            >
+              Cancelar
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-xs font-medium text-red-500 hover:text-red-700"
+          >
+            Eliminar restaurante
+          </button>
+        )}
+        {deleteMutation.isError && (
+          <p className="mt-1.5 text-xs text-red-600">{deleteMutation.error?.message || 'No se pudo eliminar'}</p>
+        )}
+      </div>
     </li>
   )
 }

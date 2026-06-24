@@ -349,6 +349,10 @@ Ejemplos de lo que debe quedar documentado aquí:
 
 ## Registro de decisiones técnicas
 
+### [2026-06-24] Borrado de restaurante desde el backoffice (cascada)
+- **Endpoint `DELETE /admin/restaurants/{id}`** (admin-gated): 404 si no existe; si existe, `DELETE` sobre `restaurants` y **la BD cascadea** a todos los hijos. Verificado que TODOS los FK → `restaurants` son `ON DELETE CASCADE` (reviews, insights, restaurant_context, field_visits, survey_responses, leads, reports, ingest_runs), así que un único delete arrastra todo sin huérfanos. **Verificado E2E** con un restaurante desechable + hijos en 4 tablas → borrado total confirmado.
+- **UI (`RestaurantRow`):** enlace sutil "Eliminar restaurante" → **confirmación inline** ("¿Borrar X y todos sus datos? No se puede deshacer" con "Sí, borrar"/"Cancelar"), no un `confirm()` nativo. `api.deleteRestaurant` (DELETE) e invalidación de `['organization', orgId]` (la fila desaparece sola). `CORSMiddleware` ya permitía DELETE.
+
 ### [2026-06-24] Fix "Not found" al generar informe + historial de ejecuciones de ingesta
 - **Bug "Not found" (404) en "Generar informe" — causa raíz:** el `uvicorn` del usuario se había arrancado **sin `--reload`** (`uvicorn api:app --port 8000`), antes de que se añadiera `GET /admin/.../report`. El proceso vivo no tenía esa ruta → 404 "Not Found". No era bug de código (el refresh/`/ingest` funcionaba porque existía al arrancar). **Verificado** inspeccionando el OpenAPI del proceso vivo (sin rutas `report`). **Solución:** reiniciar el API; **se relanzó con `--reload`** (logs a `/tmp/qinsa-api.log`) para que los cambios de código se recojan sin reinicios manuales. Confirmado: `/report` y `/runs` ahora responden 401 (no 404). **Lección operativa: en dev arrancar siempre `uvicorn … --reload`.**
 - **Historial de ejecuciones (`ingest_runs`)** — petición del usuario para tener control del gasto Apify. Tabla nueva (migración `20260624120000`): `restaurant_id`, `trigger` (manual|scheduled), `status` (success|error), `reviews_scraped`, `reviews_inserted`, `error_message`, `created_at`. RLS/GRANTs calcados de `reports`.

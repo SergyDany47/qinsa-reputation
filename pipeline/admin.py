@@ -283,6 +283,21 @@ async def onboard_restaurant(
     return res.data[0]
 
 
+@router.delete("/restaurants/{restaurant_id}")
+async def delete_restaurant(
+    restaurant_id: str = Path(...),
+    admin: dict = Depends(require_platform_admin),
+):
+    """Elimina un restaurante y, en cascada, todos sus datos (reseñas, insights,
+    contexto, informes, runs). Operación destructiva — el backoffice la confirma."""
+    existing = supabase.table("restaurants").select("id,name").eq("id", restaurant_id).execute().data
+    if not existing:
+        raise HTTPException(status_code=404, detail="Restaurante no encontrado")
+    supabase.table("restaurants").delete().eq("id", restaurant_id).execute()
+    logger.info("Restaurante eliminado: %s (%s)", existing[0].get("name"), restaurant_id)
+    return {"deleted": True, "id": restaurant_id, "name": existing[0].get("name")}
+
+
 # ── Configuración (operativa editable + estado de secretos) ─────────────────────
 
 def _mask_secret(value: Optional[str]) -> dict:

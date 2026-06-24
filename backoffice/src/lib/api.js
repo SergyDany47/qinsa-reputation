@@ -47,6 +47,8 @@ export const api = {
     request(`/admin/organizations/${orgId}/members`, { method: 'POST', body }),
   onboardRestaurant: (orgId, body) =>
     request(`/admin/organizations/${orgId}/restaurants`, { method: 'POST', body }),
+  deleteRestaurant: (restaurantId) =>
+    request(`/admin/restaurants/${restaurantId}`, { method: 'DELETE' }),
   getSettings: () => request('/admin/settings'),
   updateSettings: (body) => request('/admin/settings', { method: 'PUT', body }),
   getContext: (restaurantId) => request(`/admin/restaurants/${restaurantId}/context`),
