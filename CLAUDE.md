@@ -349,6 +349,15 @@ Ejemplos de lo que debe quedar documentado aquí:
 
 ## Registro de decisiones técnicas
 
+### [2026-06-24] Fase 3 — Spike de viabilidad GBP (investigación, sin código)
+- **Documento `GBP_SPIKE.md`** (raíz) con hallazgos fundamentados (fuentes citadas, datos jun-2026). Resumen del veredicto:
+  - **Publicar el reply es trivial** (1 PUT `v4/.../reviews/{id}/reply`, scope único `business.manage`). El coste NO está ahí.
+  - **Barrera real = access gate de Google:** cuota por defecto **0 QPM** → formulario de Access Request → **aprobación manual de días a semanas**; además **verificación OAuth** de la app (scope sensible). Fuera de nuestro control y lento.
+  - **Novedad 2026 — moderación (`ReviewReplyState` PENDING/REJECTED):** las respuestas vía API se moderan y pueden rechazarse sin aviso → "publicada" ≠ "visible", y el **auto-publish es más arriesgado** de lo previsto.
+  - **Multi-tenant:** OAuth por cliente (refresh token por restaurante), y mapeo `restaurant ↔ accountId/locationId` + `reviewId` de Google (≠ el `review_id` de Apify que guardamos hoy).
+  - **Veredicto:** confirma el roadmap — **manual primero** (copy/paste, cero dep Google), integración GBP real **diferida** hasta app verificada + acceso aprobado + clientes que lo justifiquen.
+- **Implicación accionable para el groundwork (lo que SÍ se construye en Fase 3):** modelo de estado de respuesta `borrador→aprobada→publicada` (+ `pending`/`rejected` de Google previstos) en `reviews`, y modo de publicación por restaurante `manual|pre-aprobación|automática` (default `manual`, auto gateada). Campos GBP (tokens, account/location/review ids) se difieren a Fase 5.
+
 ### [2026-06-24] Borrado de restaurante desde el backoffice (cascada)
 - **Endpoint `DELETE /admin/restaurants/{id}`** (admin-gated): 404 si no existe; si existe, `DELETE` sobre `restaurants` y **la BD cascadea** a todos los hijos. Verificado que TODOS los FK → `restaurants` son `ON DELETE CASCADE` (reviews, insights, restaurant_context, field_visits, survey_responses, leads, reports, ingest_runs), así que un único delete arrastra todo sin huérfanos. **Verificado E2E** con un restaurante desechable + hijos en 4 tablas → borrado total confirmado.
 - **UI (`RestaurantRow`):** enlace sutil "Eliminar restaurante" → **confirmación inline** ("¿Borrar X y todos sus datos? No se puede deshacer" con "Sí, borrar"/"Cancelar"), no un `confirm()` nativo. `api.deleteRestaurant` (DELETE) e invalidación de `['organization', orgId]` (la fila desaparece sola). `CORSMiddleware` ya permitía DELETE.
